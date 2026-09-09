@@ -31,7 +31,7 @@ function Logo() {
 export function ConnectionPill({ compact = false }: { compact?: boolean }) {
   const { status, statusError } = useData();
   const connected = Boolean(status?.connected);
-  const label = !status ? "Verificando…" : !status.configured ? "Não configurado" : connected ? "Conectado" : statusError ? "Sem resposta" : "Desconectado";
+  const label = !status ? "Verificando…" : !status.configured ? "Configurar uazapi" : connected ? "Conectado" : statusError ? "Sem resposta" : "Desconectado";
   return (
     <Link
       href="/conexao"

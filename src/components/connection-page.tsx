@@ -1,13 +1,103 @@
 "use client";
 
-import { CheckCircle2, LogOut, QrCode, RefreshCw, Smartphone, Wifi, WifiOff } from "lucide-react";
+import { CheckCircle2, Eye, EyeOff, KeyRound, LogOut, Pencil, QrCode, RefreshCw, Save, Smartphone, Wifi, WifiOff } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { api } from "@/lib/client";
 import { formatPhone } from "@/lib/phone";
+import { saveSettings } from "@/lib/settings";
 import type { InstanceStatus } from "@/lib/types";
 import { useData } from "./data-provider";
 import { Avatar, Badge, Modal, PageHeader, Spinner } from "./ui";
+
+function SettingsCard() {
+  const { settings, status, refreshStatus } = useData();
+  const configured = Boolean(settings?.url && settings?.token) || Boolean(status?.envConfigured);
+  const [editing, setEditing] = useState(false);
+  const [url, setUrl] = useState(settings?.url || "");
+  const [token, setToken] = useState(settings?.token || "");
+  const [show, setShow] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const open = editing || !configured;
+
+  const save = async () => {
+    const u = url.trim().replace(/\/+$/, "");
+    const t = token.trim();
+    if (!/^https?:\/\/.+/i.test(u)) {
+      toast.error("Informe a URL completa do servidor, ex.: https://seu-servidor.uazapi.com");
+      return;
+    }
+    if (t.length < 8) {
+      toast.error("Informe o token da instância.");
+      return;
+    }
+    setSaving(true);
+    saveSettings({ url: u, token: t });
+    try {
+      const s = await api<InstanceStatus>("/api/instance/status");
+      toast.success(s.connected ? "Configuração salva. WhatsApp conectado!" : "Configuração salva. Agora conecte o WhatsApp.");
+      setEditing(false);
+    } catch (err) {
+      toast.error(`O uazapi não respondeu: ${(err as Error).message}`);
+    } finally {
+      setSaving(false);
+      void refreshStatus();
+    }
+  };
+
+  return (
+    <div className="card mb-6 p-5">
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/[0.05] text-slate-300">
+            <KeyRound className="h-5 w-5" />
+          </span>
+          <div>
+            <h2 className="font-semibold text-white">Servidor uazapi</h2>
+            <p className="text-xs text-slate-500">
+              {configured && !open ? `${settings?.url || "Configurado no servidor"} · token salvo neste navegador` : "Cole a URL do servidor e o token da instância (painel do uazapi)."}
+            </p>
+          </div>
+        </div>
+        {configured && !open && (
+          <button type="button" onClick={() => setEditing(true)} className="btn-secondary h-8 px-3 text-xs">
+            <Pencil className="h-3.5 w-3.5" /> Alterar
+          </button>
+        )}
+      </div>
+      {open && (
+        <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_1fr_auto]">
+          <div>
+            <label className="label">Server URL</label>
+            <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://seu-servidor.uazapi.com" className="input" autoFocus />
+          </div>
+          <div>
+            <label className="label">Instance Token</label>
+            <div className="relative">
+              <input type={show ? "text" : "password"} value={token} onChange={(e) => setToken(e.target.value)} placeholder="token da instância" className="input pr-10" />
+              <button type="button" onClick={() => setShow((v) => !v)} className="absolute top-1/2 right-2 -translate-y-1/2 rounded-md p-1 text-slate-500 hover:text-white">
+                {show ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              </button>
+            </div>
+          </div>
+          <div className="flex items-end gap-2">
+            {configured && (
+              <button type="button" onClick={() => setEditing(false)} className="btn-secondary">
+                Cancelar
+              </button>
+            )}
+            <button type="button" onClick={save} disabled={saving} className="btn-primary">
+              {saving ? <Spinner /> : <Save className="h-4 w-4" />} Salvar
+            </button>
+          </div>
+          <p className="text-[11px] leading-relaxed text-slate-500 sm:col-span-3">
+            O token fica salvo apenas neste navegador e é usado para o app falar com a sua instância. Nada é armazenado no servidor.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function ConnectionPage() {
   const { status, statusError, refreshStatus } = useData();
@@ -79,6 +169,8 @@ export function ConnectionPage() {
         }
       />
 
+      <SettingsCard />
+
       <div className="grid gap-6 lg:grid-cols-[1fr_1fr]">
         <div className="card p-6">
           <div className="flex items-center gap-4">
@@ -90,11 +182,11 @@ export function ConnectionPage() {
                 <h2 className="font-semibold text-white">{!status ? "Verificando…" : connected ? "Conectado" : status.configured ? "Desconectado" : "Não configurado"}</h2>
                 {status && <Badge tone={connected ? "success" : "warning"}>{status.status}</Badge>}
               </div>
-              <p className="truncate text-xs text-slate-500">{status?.name ? `Instância: ${status.name}` : process.env.NEXT_PUBLIC_UAZAPI_HINT || "Servidor uazapi configurado no .env"}</p>
+              <p className="truncate text-xs text-slate-500">{status?.name ? `Instância: ${status.name}` : status?.configured ? "Instância do uazapi" : "Preencha a configuração acima"}</p>
             </div>
           </div>
 
-          {statusError && <p className="mt-4 rounded-xl border border-rose-500/25 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">{statusError}</p>}
+          {statusError && status?.configured && <p className="mt-4 rounded-xl border border-rose-500/25 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">{statusError}</p>}
 
           {connected && (
             <div className="mt-6 flex items-center gap-4 rounded-2xl border border-white/8 bg-white/[0.03] p-4">

@@ -7,16 +7,18 @@ import { toast } from "sonner";
 import { formatDate } from "@/lib/client";
 import { CampaignProgress, useCampaign } from "./campaign-progress";
 import { MessagePreview } from "./message-preview";
-import { PageHeader, Skeleton } from "./ui";
+import { PageHeader } from "./ui";
 
 export function CampaignDetail({ id }: { id: string }) {
-  const { campaign, running, error } = useCampaign(id);
+  const { campaign, running } = useCampaign(id);
+  const error = campaign ? null : "Campanha não encontrada neste navegador.";
   const router = useRouter();
 
   const reuse = () => {
     if (!campaign) return;
     try {
-      sessionStorage.setItem("disparos:draft", JSON.stringify({ message: campaign.message, selection: campaign.sources }));
+      sessionStorage.setItem("disparos:draft", JSON.stringify({ message: { text: campaign.message.text, attachments: [] }, selection: campaign.sources }));
+      if (campaign.message.attachments.length) toast.info("Os anexos precisam ser adicionados novamente.");
       router.push("/");
     } catch {
       toast.error("Não foi possível copiar a campanha.");
@@ -41,9 +43,7 @@ export function CampaignDetail({ id }: { id: string }) {
       />
       {error ? (
         <div className="card p-6 text-sm text-rose-300">{error}</div>
-      ) : !campaign ? (
-        <Skeleton className="h-64" />
-      ) : (
+      ) : !campaign ? null : (
         <div className="grid gap-6 lg:grid-cols-[1fr_380px]">
           <div className="card p-5">
             <CampaignProgress campaign={campaign} running={running} />

@@ -5,9 +5,9 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
-import { api } from "@/lib/client";
+import { createCampaign, sendOne, startCampaign } from "@/lib/campaign-client";
 import type { SelectionItem } from "@/lib/audiences";
-import type { Campaign, MessageDraft } from "@/lib/types";
+import type { MessageDraft } from "@/lib/types";
 import { CampaignProgress, useCampaign } from "./campaign-progress";
 import { useData } from "./data-provider";
 import { MessageComposer } from "./message-composer";
@@ -20,7 +20,7 @@ const EMPTY: MessageDraft = { text: "", attachments: [] };
 
 export function NewCampaign() {
   const router = useRouter();
-  const { status, audiences, loadAudiences } = useData();
+  const { status, audiences } = useData();
   const params = useSearchParams();
   const [message, setMessage] = useState<MessageDraft>(EMPTY);
   const [selection, setSelection] = useState<SelectionItem[]>([]);
@@ -58,17 +58,13 @@ export function NewCampaign() {
   const listaId = params.get("lista");
   useEffect(() => {
     if (!listaId) return;
-    if (!audiences.loaded) {
-      void loadAudiences();
-      return;
-    }
-    const a = audiences.data.find((x) => x.id === listaId);
+    const a = audiences.find((x) => x.id === listaId);
     queueMicrotask(() => {
       if (a) setSelection((prev) => (prev.some((p) => p.type === "audience" && p.id === a.id) ? prev : [...prev, { type: "audience", id: a.id, name: a.name }]));
       router.replace("/");
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [listaId, audiences.loaded]);
+  }, [listaId]);
 
   const hasContent = Boolean(message.text.trim()) || message.attachments.length > 0;
   const canSend = hasContent && counts.total > 0 && !sending;
@@ -77,20 +73,14 @@ export function NewCampaign() {
   const estimateSec = Math.max(0, counts.total - 1) * avg + counts.total * (1 + message.attachments.length * 2);
   const estimate = estimateSec < 90 ? `~${Math.round(estimateSec)} s` : `~${Math.round(estimateSec / 60)} min`;
 
-  const start = async () => {
+  const start = () => {
     setSending(true);
     try {
-      const res = await api<{ campaign: Campaign }>("/api/campaigns", {
-        method: "POST",
-        body: JSON.stringify({
-          name,
-          message,
-          selection,
-          settings: { delayMinSeconds: delayMin, delayMaxSeconds: delayMax },
-        }),
-      });
+      if (delayMin > delayMax) throw new Error("O intervalo mínimo não pode ser maior que o máximo.");
+      const campaign = createCampaign({ name, message, selection, settings: { delayMinSeconds: delayMin, delayMaxSeconds: delayMax } });
+      startCampaign(campaign, message.attachments);
       setConfirmOpen(false);
-      setActiveId(res.campaign.id);
+      setActiveId(campaign.id);
       toast.success("Disparo iniciado!");
     } catch (err) {
       toast.error((err as Error).message);
@@ -102,7 +92,7 @@ export function NewCampaign() {
   const sendTest = async () => {
     setTesting(true);
     try {
-      await api("/api/test-send", { method: "POST", body: JSON.stringify({ number: testNumber, message }) });
+      await sendOne(testNumber, message);
       toast.success("Mensagem de teste enviada.");
       setTestOpen(false);
     } catch (err) {
@@ -140,10 +130,10 @@ export function NewCampaign() {
         <div className="mb-5 flex items-center gap-3 rounded-xl border border-amber-500/25 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
           <AlertTriangle className="h-4 w-4 shrink-0 text-amber-300" />
           <span className="flex-1">
-            {status.configured ? "O WhatsApp não está conectado. Conecte a instância para conseguir disparar." : "Configure UAZAPI_URL e UAZAPI_TOKEN no arquivo .env."}
+            {status.configured ? "O WhatsApp não está conectado. Conecte a instância para conseguir disparar." : "Informe a URL e o token do uazapi na aba Conexão para começar."}
           </span>
           <Link href="/conexao" className="btn-secondary h-8 px-3 text-xs">
-            Conectar <ExternalLink className="h-3 w-3" />
+            {status.configured ? "Conectar" : "Configurar"} <ExternalLink className="h-3 w-3" />
           </Link>
         </div>
       )}
@@ -263,7 +253,7 @@ export function NewCampaign() {
           reset();
         }}
         title={campaign?.name || "Disparo em andamento"}
-        description={running ? "Você pode fechar esta janela; o envio continua em segundo plano." : "Disparo finalizado."}
+        description={running ? "Você pode fechar esta janela, mas mantenha a aba do app aberta até o fim." : "Disparo finalizado."}
         size="lg"
         footer={
           <>

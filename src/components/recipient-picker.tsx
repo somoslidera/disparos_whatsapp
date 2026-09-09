@@ -32,7 +32,7 @@ export function RecipientPicker({
   excludeAudienceIds?: string[];
   className?: string;
 }) {
-  const { contacts, groups, audiences, loadContacts, loadGroups, loadAudiences, status } = useData();
+  const { contacts, groups, audiences, loadContacts, loadGroups, status } = useData();
   const [tab, setTab] = useState<Tab>("contacts");
   const [query, setQuery] = useState("");
   const [manual, setManual] = useState("");
@@ -40,7 +40,6 @@ export function RecipientPicker({
   useEffect(() => {
     if (!contacts.loaded && !contacts.loading) void loadContacts();
     if (!groups.loaded && !groups.loading) void loadGroups();
-    if (!audiences.loaded && !audiences.loading) void loadAudiences();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -57,10 +56,10 @@ export function RecipientPicker({
         subtitle: g.participants ? `${g.participants} participantes` : "Grupo",
         image: g.image,
       }));
-    return audiences.data
+    return audiences
       .filter((a) => !excludeAudienceIds.includes(a.id))
       .map((a) => ({ type: "audience", id: a.id, name: a.name, subtitle: `${a.total} destinatário${a.total === 1 ? "" : "s"} · ${a.members.length} itens` }));
-  }, [tab, contacts.data, groups.data, audiences.data, excludeAudienceIds]);
+  }, [tab, contacts.data, groups.data, audiences, excludeAudienceIds]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -69,8 +68,9 @@ export function RecipientPicker({
     return rows.filter((r) => r.name.toLowerCase().includes(q) || (digits && onlyDigits(r.subtitle + r.id).includes(digits)));
   }, [rows, query]);
 
-  const resource = tab === "contacts" ? contacts : tab === "groups" ? groups : audiences;
-  const reload = tab === "contacts" ? () => loadContacts(true) : tab === "groups" ? () => loadGroups(true) : loadAudiences;
+  const localResource = { data: audiences, loading: false, error: null, loaded: true };
+  const resource = tab === "contacts" ? contacts : tab === "groups" ? groups : localResource;
+  const reload = tab === "contacts" ? () => loadContacts(true) : tab === "groups" ? () => loadGroups(true) : async () => {};
 
   const toggle = (row: Row) => {
     const key = `${row.type}:${row.id}`;
@@ -109,7 +109,7 @@ export function RecipientPicker({
   const tabs: { id: Tab; label: string; icon: typeof User; count: number }[] = [
     { id: "contacts", label: "Contatos", icon: User, count: contacts.data.length },
     { id: "groups", label: "Grupos", icon: Users, count: groups.data.length },
-    ...(allowAudiences ? [{ id: "audiences" as Tab, label: "Minhas listas", icon: Layers, count: audiences.data.length }] : []),
+    ...(allowAudiences ? [{ id: "audiences" as Tab, label: "Minhas listas", icon: Layers, count: audiences.length }] : []),
   ];
 
   const selectedInTab = rows.filter((r) => selected.has(`${r.type}:${r.id}`)).length;
@@ -186,7 +186,13 @@ export function RecipientPicker({
           <EmptyState
             icon={<AlertCircle className="h-5 w-5 text-rose-400" />}
             title="Não foi possível carregar"
-            description={status && !status.connected ? "O WhatsApp não está conectado. Conecte a instância na aba Conexão." : resource.error}
+            description={
+              status && !status.configured
+                ? "Configure a URL e o token do uazapi na aba Conexão."
+                : status && !status.connected
+                  ? "O WhatsApp não está conectado. Conecte a instância na aba Conexão."
+                  : resource.error
+            }
             action={
               <button type="button" onClick={() => void reload()} className="btn-secondary text-xs">
                 <RefreshCw className="h-3.5 w-3.5" /> Tentar novamente

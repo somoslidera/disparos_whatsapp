@@ -1,73 +1,38 @@
 "use client";
 
-import { History, Layers, Paperclip, RefreshCw, Trash2, User, Users } from "lucide-react";
+import { History, Layers, Paperclip, Trash2, User, Users } from "lucide-react";
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useMemo, useState, useSyncExternalStore } from "react";
 import { toast } from "sonner";
-import { api, formatDate } from "@/lib/client";
+import { formatDate } from "@/lib/client";
+import { isRunning } from "@/lib/campaign-client";
+import { deleteCampaign, getCampaigns, getServerCampaigns, subscribe as subscribeStore } from "@/lib/store";
 import type { Campaign } from "@/lib/types";
-import { statusLabel, statusTone } from "./campaign-progress";
-import { Badge, EmptyState, Modal, PageHeader, Skeleton, Spinner } from "./ui";
+import { counts, statusLabel, statusTone } from "./campaign-progress";
+import { Badge, EmptyState, Modal, PageHeader } from "./ui";
 
-type Summary = Omit<Campaign, "recipients"> & { counts: { total: number; sent: number; failed: number; pending: number; cancelled: number } };
+type Summary = Campaign & { counts: ReturnType<typeof counts> };
 
 export function HistoryPage() {
-  const [items, setItems] = useState<Summary[] | null>(null);
-  const [loading, setLoading] = useState(false);
+  const campaigns = useSyncExternalStore(subscribeStore, getCampaigns, getServerCampaigns);
+  const items = useMemo<Summary[]>(() => campaigns.map((c) => ({ ...c, counts: counts(c.recipients) })), [campaigns]);
   const [deleting, setDeleting] = useState<Summary | null>(null);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      const res = await api<{ campaigns: Summary[] }>("/api/campaigns");
-      setItems(res.campaigns);
-    } catch (err) {
-      toast.error((err as Error).message);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    const run = () => void load();
-    const first = setTimeout(run, 0);
-    const t = setInterval(run, 5000);
-    return () => {
-      clearTimeout(first);
-      clearInterval(t);
-    };
-  }, [load]);
-
-  const remove = async () => {
+  const remove = () => {
     if (!deleting) return;
-    try {
-      await api(`/api/campaigns/${deleting.id}`, { method: "DELETE" });
-      setDeleting(null);
-      void load();
-    } catch (err) {
-      toast.error((err as Error).message);
+    if (isRunning(deleting.id)) {
+      toast.error("Cancele a campanha antes de excluí-la.");
+      return;
     }
+    deleteCampaign(deleting.id);
+    setDeleting(null);
   };
 
   return (
     <div className="animate-fade-up">
-      <PageHeader
-        title="Histórico"
-        subtitle="Acompanhe os disparos realizados e o resultado por destinatário."
-        actions={
-          <button type="button" onClick={() => void load()} disabled={loading} className="btn-secondary">
-            {loading ? <Spinner /> : <RefreshCw className="h-4 w-4" />} Atualizar
-          </button>
-        }
-      />
+      <PageHeader title="Histórico" subtitle="Acompanhe os disparos realizados e o resultado por destinatário. Fica salvo neste navegador." />
 
-      {!items ? (
-        <div className="space-y-3">
-          {Array.from({ length: 4 }).map((_, i) => (
-            <Skeleton key={i} className="h-24" />
-          ))}
-        </div>
-      ) : items.length === 0 ? (
+      {items.length === 0 ? (
         <div className="card">
           <EmptyState
             icon={<History className="h-5 w-5" />}

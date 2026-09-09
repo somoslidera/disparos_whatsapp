@@ -1,11 +1,14 @@
 "use client";
 
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { api } from "@/lib/client";
-import type { Audience, InstanceStatus, WaContact, WaGroup } from "@/lib/types";
+import { getSettings, subscribeSettings } from "@/lib/settings";
+import { getAudiences, getServerAudiences, subscribe as subscribeStore } from "@/lib/store";
+import { countAudience } from "@/lib/audiences";
+import type { Audience, InstanceStatus, UazapiSettings, WaContact, WaGroup } from "@/lib/types";
 
 export type AudienceWithTotal = Audience & { total: number };
-export type Status = (InstanceStatus & { configured: boolean }) | null;
+export type Status = (InstanceStatus & { configured: boolean; envConfigured?: boolean }) | null;
 
 interface Resource<T> {
   data: T;
@@ -15,15 +18,15 @@ interface Resource<T> {
 }
 
 interface DataContextValue {
+  settings: UazapiSettings | null;
   status: Status;
   statusError: string | null;
   refreshStatus: () => Promise<void>;
   contacts: Resource<WaContact[]>;
   groups: Resource<WaGroup[]>;
-  audiences: Resource<AudienceWithTotal[]>;
+  audiences: AudienceWithTotal[];
   loadContacts: (force?: boolean) => Promise<void>;
   loadGroups: (force?: boolean) => Promise<void>;
-  loadAudiences: () => Promise<void>;
 }
 
 const DataContext = createContext<DataContextValue | null>(null);
@@ -34,8 +37,9 @@ function useResource<T>(initial: T, fetcher: (force: boolean) => Promise<T>) {
   const load = useCallback(
     async (force = false) => {
       if (inflight.current && !force) return inflight.current;
-      setState((s) => ({ ...s, loading: true, error: null }));
-      const p = fetcher(force)
+      const p = Promise.resolve()
+        .then(() => setState((s) => ({ ...s, loading: true, error: null })))
+        .then(() => fetcher(force))
         .then((data) => setState({ data, loading: false, error: null, loaded: true }))
         .catch((err: Error) => setState((s) => ({ ...s, loading: false, error: err.message, loaded: true })))
         .finally(() => {
@@ -49,13 +53,19 @@ function useResource<T>(initial: T, fetcher: (force: boolean) => Promise<T>) {
   return [state, load] as const;
 }
 
+const noopSettings = () => null;
+
 export function DataProvider({ children }: { children: ReactNode }) {
+  const settings = useSyncExternalStore(subscribeSettings, getSettings, noopSettings);
+  const rawAudiences = useSyncExternalStore(subscribeStore, getAudiences, getServerAudiences);
+  const audiences = useMemo(() => rawAudiences.map((a) => ({ ...a, total: countAudience(a, rawAudiences) })), [rawAudiences]);
+
   const [status, setStatus] = useState<Status>(null);
   const [statusError, setStatusError] = useState<string | null>(null);
 
   const refreshStatus = useCallback(async () => {
     try {
-      const s = await api<InstanceStatus & { configured: boolean }>("/api/instance/status");
+      const s = await api<InstanceStatus & { configured: boolean; envConfigured?: boolean }>("/api/instance/status");
       setStatus(s);
       setStatusError(null);
     } catch (err) {
@@ -73,7 +83,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
       clearTimeout(first);
       clearInterval(t);
     };
-  }, [refreshStatus]);
+  }, [refreshStatus, settings]);
 
   const [contacts, loadContacts] = useResource<WaContact[]>(
     [],
@@ -83,24 +93,10 @@ export function DataProvider({ children }: { children: ReactNode }) {
     [],
     useCallback(async (force: boolean) => (await api<{ groups: WaGroup[] }>(`/api/whatsapp/groups${force ? "?force=1" : ""}`)).groups, []),
   );
-  const [audiences, loadAudiences] = useResource<AudienceWithTotal[]>(
-    [],
-    useCallback(async () => (await api<{ audiences: AudienceWithTotal[] }>("/api/audiences")).audiences, []),
-  );
 
   const value = useMemo<DataContextValue>(
-    () => ({
-      status,
-      statusError,
-      refreshStatus,
-      contacts,
-      groups,
-      audiences,
-      loadContacts,
-      loadGroups,
-      loadAudiences: () => loadAudiences(true),
-    }),
-    [status, statusError, refreshStatus, contacts, groups, audiences, loadContacts, loadGroups, loadAudiences],
+    () => ({ settings, status, statusError, refreshStatus, contacts, groups, audiences, loadContacts, loadGroups }),
+    [settings, status, statusError, refreshStatus, contacts, groups, audiences, loadContacts, loadGroups],
   );
 
   return <DataContext.Provider value={value}>{children}</DataContext.Provider>;

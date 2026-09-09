@@ -8,9 +8,9 @@ import { useData } from "./data-provider";
 export function useResolvedCount(selection: SelectionItem[]) {
   const { audiences } = useData();
   return useMemo(() => {
-    const r = resolveRecipients(selection, audiences.data);
+    const r = resolveRecipients(selection, audiences);
     return { total: r.length, contacts: r.filter((x) => x.type === "contact").length, groups: r.filter((x) => x.type === "group").length };
-  }, [selection, audiences.data]);
+  }, [selection, audiences]);
 }
 
 export function SelectionSummary({ value, onChange }: { value: SelectionItem[]; onChange: (next: SelectionItem[]) => void }) {

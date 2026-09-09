@@ -34,8 +34,9 @@ export interface Audience {
 
 export type AttachmentKind = "image" | "video" | "audio" | "document";
 
-export interface Attachment {
-  uploadId: string;
+/** Metadados do anexo (o conteúdo fica apenas em memória durante a campanha). */
+export interface AttachmentMeta {
+  id: string;
   name: string;
   mime: string;
   size: number;
@@ -44,9 +45,19 @@ export interface Attachment {
   asVoice?: boolean;
 }
 
+export interface Attachment extends AttachmentMeta {
+  /** data URI base64 */
+  dataUrl: string;
+}
+
 export interface MessageDraft {
   text: string;
   attachments: Attachment[];
+}
+
+export interface StoredMessage {
+  text: string;
+  attachments: AttachmentMeta[];
 }
 
 export type RecipientStatus = "pending" | "sending" | "sent" | "failed" | "cancelled";
@@ -70,7 +81,7 @@ export interface CampaignSettings {
 export interface Campaign {
   id: string;
   name: string;
-  message: MessageDraft;
+  message: StoredMessage;
   recipients: CampaignRecipient[];
   settings: CampaignSettings;
   status: CampaignStatus;
@@ -81,9 +92,9 @@ export interface Campaign {
   sources: { type: MemberType; id: string; name: string }[];
 }
 
-export interface Database {
-  audiences: Audience[];
-  campaigns: Campaign[];
+export interface UazapiSettings {
+  url: string;
+  token: string;
 }
 
 export interface InstanceStatus {

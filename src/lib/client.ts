@@ -1,5 +1,7 @@
 "use client";
 
+import { credentialHeaders } from "./settings";
+
 export class ApiError extends Error {
   status: number;
   constructor(message: string, status: number) {
@@ -13,6 +15,7 @@ export async function api<T = unknown>(url: string, init?: RequestInit): Promise
     ...init,
     headers: {
       ...(init?.body && !(init.body instanceof FormData) ? { "Content-Type": "application/json" } : {}),
+      ...credentialHeaders(),
       ...(init?.headers || {}),
     },
     cache: "no-store",
@@ -46,4 +49,14 @@ export function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+/** Lê um arquivo do navegador como data URI base64. */
+export function fileToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(reader.error || new Error("Falha ao ler o arquivo"));
+    reader.readAsDataURL(file);
+  });
 }

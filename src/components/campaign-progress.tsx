@@ -2,41 +2,23 @@
 
 import clsx from "clsx";
 import { CheckCircle2, Circle, Loader2, User, Users, XCircle } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useCallback, useState, useSyncExternalStore } from "react";
 import { toast } from "sonner";
-import { api, formatDate } from "@/lib/client";
+import { formatDate } from "@/lib/client";
+import { cancelCampaign, isRunning, subscribeRunning } from "@/lib/campaign-client";
+import { getCampaign, subscribe as subscribeStore } from "@/lib/store";
 import type { Campaign, CampaignRecipient } from "@/lib/types";
-import { Badge, Spinner } from "./ui";
+import { Badge } from "./ui";
 
-export function useCampaign(id: string | null, pollMs = 2000) {
-  const [campaign, setCampaign] = useState<Campaign | null>(null);
-  const [running, setRunning] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+const noop = () => undefined;
+const notRunning = () => false;
 
-  useEffect(() => {
-    if (!id) return;
-    let active = true;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const tick = async () => {
-      try {
-        const res = await api<{ campaign: Campaign; running: boolean }>(`/api/campaigns/${id}`);
-        if (!active) return;
-        setCampaign(res.campaign);
-        setRunning(res.running);
-        setError(null);
-        if (res.running || res.campaign.status === "queued") timer = setTimeout(tick, pollMs);
-      } catch (err) {
-        if (active) setError((err as Error).message);
-      }
-    };
-    void tick();
-    return () => {
-      active = false;
-      if (timer) clearTimeout(timer);
-    };
-  }, [id, pollMs]);
-
-  return { campaign, running, error };
+export function useCampaign(id: string | null) {
+  const getSnap = useCallback(() => (id ? getCampaign(id) : undefined), [id]);
+  const campaign = useSyncExternalStore(subscribeStore, getSnap, noop);
+  const getRun = useCallback(() => (id ? isRunning(id) : false), [id]);
+  const running = useSyncExternalStore(subscribeRunning, getRun, notRunning);
+  return { campaign: campaign ?? null, running };
 }
 
 export function statusTone(status: Campaign["status"]) {
@@ -72,22 +54,15 @@ export function ProgressBar({ recipients }: { recipients: CampaignRecipient[] })
   );
 }
 
-export function CampaignProgress({ campaign, running, onCancelled }: { campaign: Campaign; running: boolean; onCancelled?: () => void }) {
+export function CampaignProgress({ campaign, running }: { campaign: Campaign; running: boolean }) {
   const c = counts(campaign.recipients);
   const [cancelling, setCancelling] = useState(false);
   const done = c.sent + c.failed + c.cancelled;
 
-  const cancel = async () => {
+  const cancel = () => {
     setCancelling(true);
-    try {
-      await api(`/api/campaigns/${campaign.id}/cancel`, { method: "POST" });
-      toast.success("Cancelamento solicitado. O envio atual será concluído.");
-      onCancelled?.();
-    } catch (err) {
-      toast.error((err as Error).message);
-    } finally {
-      setCancelling(false);
-    }
+    if (cancelCampaign(campaign.id)) toast.success("Cancelamento solicitado. O envio atual será concluído.");
+    else toast.error("Esta campanha não está em execução.");
   };
 
   return (
@@ -102,10 +77,12 @@ export function CampaignProgress({ campaign, running, onCancelled }: { campaign:
         </div>
         {running && (
           <button type="button" onClick={cancel} disabled={cancelling} className="btn-danger h-8 px-3 text-xs">
-            {cancelling ? <Spinner /> : <XCircle className="h-3.5 w-3.5" />} Cancelar envio
+            <XCircle className="h-3.5 w-3.5" /> Cancelar envio
           </button>
         )}
       </div>
+
+      {running && <p className="rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-100">Mantenha esta aba aberta até o fim do disparo.</p>}
 
       <ProgressBar recipients={campaign.recipients} />
 

@@ -10,17 +10,29 @@ Aplicativo para envio de mensagens em massa no WhatsApp, conectado ao seu númer
 - Intervalo aleatório entre envios (reduz risco de bloqueio) e progresso em tempo real
 - Histórico com o status de cada destinatário e opção de reutilizar campanhas
 - Conexão do número por QR code (ou código de pareamento)
-- Proteção opcional por senha
+- Funciona hospedado na Vercel: a configuração do uazapi é feita pelo navegador
+- Proteção opcional por senha (para instalação própria)
 
-## Como rodar
+## Como usar (hospedado)
+
+1. Abra o app e vá em **Conexão**.
+2. Cole a **Server URL** e o **Instance Token** do uazapi e clique em Salvar. Essas informações ficam salvas apenas no seu navegador.
+3. Gere o QR code e escaneie no WhatsApp.
+4. Pronto: contatos e grupos são carregados da sua conta e você já pode disparar.
+
+Listas, histórico e configuração ficam no navegador (localStorage). O servidor não guarda nada; ele apenas repassa as chamadas ao uazapi.
+Durante um disparo, mantenha a aba aberta: o envio é orquestrado pelo navegador, um destinatário por vez.
+
+## Como rodar localmente
 
 Requisitos: Node.js 20 ou superior.
 
 ```bash
-cp .env.example .env   # preencha UAZAPI_URL e UAZAPI_TOKEN
 npm install
 npm run dev            # desenvolvimento: http://localhost:3000
 ```
+
+Opcionalmente, copie `.env.example` para `.env` e preencha `UAZAPI_URL` e `UAZAPI_TOKEN` para não precisar configurar pelo navegador.
 
 Em produção:
 
@@ -29,39 +41,33 @@ npm run build
 npm start
 ```
 
-Ou com Docker:
-
-```bash
-docker compose up -d --build
-```
-
 ## Configuração (`.env`)
+
+Todas opcionais. Sem elas, o app pede a URL e o token na tela Conexão.
 
 | Variável        | Descrição                                                                 |
 | --------------- | ------------------------------------------------------------------------- |
 | `UAZAPI_URL`    | URL do servidor uazapi, ex.: `https://seu-servidor.uazapi.com`            |
 | `UAZAPI_TOKEN`  | Token da instância (Instance Token)                                       |
-| `APP_PASSWORD`  | Opcional. Senha para acessar o app. Vazio desabilita a proteção.          |
-| `DATA_DIR`      | Opcional. Pasta do banco (`db.json`) e dos anexos. Padrão: `./data`       |
+| `APP_PASSWORD`  | Senha para acessar o app. Vazio desabilita a proteção.                    |
 
 Nunca versione o `.env`: ele já está no `.gitignore`.
 
-## Uso
+## Telas
 
-1. **Conexão**: gere o QR code e escaneie no WhatsApp (Aparelhos conectados).
-2. **Minhas listas** (opcional): crie listas reutilizáveis com contatos, grupos e outras listas.
-3. **Nova campanha**: escreva a mensagem, anexe arquivos, selecione contatos, grupos ou listas e clique em **Disparar**.
-   Use **Enviar teste** para receber a mensagem no seu próprio número antes.
-4. **Histórico**: acompanhe o resultado por destinatário e reutilize campanhas antigas.
+- **Conexão**: configuração do uazapi, QR code e status do número.
+- **Minhas listas**: listas reutilizáveis com contatos, grupos e outras listas.
+- **Nova campanha**: mensagem, anexos, seleção de destinatários e disparo. Use **Enviar teste** para receber no seu próprio número antes.
+- **Histórico**: resultado por destinatário e opção de reutilizar campanhas.
 
 ## Como funciona o envio
 
 - Os destinatários são expandidos e deduplicados (uma lista dentro de outra lista funciona, referências circulares são bloqueadas).
-- O envio é sequencial, um destinatário por vez, com intervalo aleatório entre o mínimo e o máximo configurados (padrão 4 a 10 s).
+- O navegador envia um destinatário por vez para `POST /api/send`, com intervalo aleatório entre o mínimo e o máximo configurados (padrão 4 a 10 s).
 - Texto com imagem, vídeo ou documento vai como legenda do primeiro anexo. Áudios não aceitam legenda, então o texto é enviado em uma mensagem separada.
 - Áudios são enviados como **mensagem de voz** (`ptt`) por padrão; é possível alternar para arquivo de áudio em cada anexo.
-- Arquivos são enviados ao uazapi em base64, então o app não precisa de URL pública.
-- Se o servidor reiniciar durante um disparo, a campanha fica marcada como cancelada nos destinatários que não receberam.
+- Arquivos são enviados ao uazapi em base64, então o app não precisa de URL pública. Limite de 3 MB por arquivo (limite de corpo de requisição da Vercel).
+- Se a aba for fechada durante um disparo, a campanha fica marcada como cancelada nos destinatários que não receberam.
 
 ## Endpoints do uazapi utilizados
 
@@ -81,10 +87,9 @@ O cliente fica em `src/lib/uazapi.ts` e faz parsing tolerante das respostas. Se 
 ## Estrutura
 
 ```
-src/app            páginas (Next.js App Router) e rotas /api
+src/app            páginas (Next.js App Router) e rotas /api (proxy para o uazapi)
 src/components     interface (compositor, seletor de destinatários, listas, histórico, conexão)
-src/lib            cliente uazapi, banco JSON, motor de campanhas, validações
-data/              db.json e anexos (não versionados)
+src/lib            cliente uazapi, entrega de mensagens, store local, motor de campanhas no navegador
 ```
 
 Scripts: `npm run dev`, `npm run build`, `npm start`, `npm run lint`, `npm run typecheck`.

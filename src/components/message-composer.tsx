@@ -4,11 +4,25 @@ import clsx from "clsx";
 import { Bold, Code, FileText, Film, Image as ImageIcon, Italic, Mic, Music, Paperclip, Strikethrough, Trash2, UploadCloud } from "lucide-react";
 import { useCallback, useRef, useState, type DragEvent } from "react";
 import { toast } from "sonner";
-import { api, formatBytes } from "@/lib/client";
-import type { Attachment, MessageDraft } from "@/lib/types";
+import { nanoid } from "nanoid";
+import { fileToDataUrl, formatBytes } from "@/lib/client";
+import type { Attachment, AttachmentKind, MessageDraft } from "@/lib/types";
 import { Spinner, Toggle } from "./ui";
 
 const ACCEPT = "image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.zip";
+/** Limite por arquivo. Na Vercel o corpo da requisição é limitado a 4,5 MB (o base64 cresce ~33%). */
+export const MAX_ATTACHMENT_BYTES = 3 * 1024 * 1024;
+
+function kindFromMime(mime: string, name: string): AttachmentKind {
+  if (mime.startsWith("image/")) return "image";
+  if (mime.startsWith("video/")) return "video";
+  if (mime.startsWith("audio/")) return "audio";
+  const ext = name.toLowerCase().split(".").pop() || "";
+  if (["jpg", "jpeg", "png", "gif", "webp"].includes(ext)) return "image";
+  if (["mp4", "mov", "webm", "3gp"].includes(ext)) return "video";
+  if (["mp3", "ogg", "opus", "m4a", "aac", "wav"].includes(ext)) return "audio";
+  return "document";
+}
 
 export function MessageComposer({ value, onChange, disabled }: { value: MessageDraft; onChange: (next: MessageDraft) => void; disabled?: boolean }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -42,12 +56,22 @@ export function MessageComposer({ value, onChange, disabled }: { value: MessageD
       const added: Attachment[] = [];
       for (const file of list) {
         try {
-          const form = new FormData();
-          form.append("file", file);
-          const { attachment } = await api<{ attachment: Attachment }>("/api/upload", { method: "POST", body: form });
-          added.push(attachment);
+          if (file.size > MAX_ATTACHMENT_BYTES) {
+            throw new Error(`arquivo acima de ${Math.round(MAX_ATTACHMENT_BYTES / 1024 / 1024)} MB. Reduza o tamanho ou use um link.`);
+          }
+          const mime = file.type || "application/octet-stream";
+          const kind = kindFromMime(mime, file.name);
+          added.push({
+            id: nanoid(10),
+            name: file.name,
+            mime,
+            size: file.size,
+            kind,
+            asVoice: kind === "audio" ? true : undefined,
+            dataUrl: await fileToDataUrl(file),
+          });
         } catch (err) {
-          toast.error(`Falha ao enviar ${file.name}: ${(err as Error).message}`);
+          toast.error(`Não foi possível anexar ${file.name}: ${(err as Error).message}`);
         } finally {
           setUploading((n) => n - 1);
         }
@@ -57,9 +81,8 @@ export function MessageComposer({ value, onChange, disabled }: { value: MessageD
     [onChange, value],
   );
 
-  const remove = async (att: Attachment) => {
-    onChange({ ...value, attachments: value.attachments.filter((a) => a.uploadId !== att.uploadId) });
-    void api(`/api/upload/${att.uploadId}`, { method: "DELETE" }).catch(() => null);
+  const remove = (att: Attachment) => {
+    onChange({ ...value, attachments: value.attachments.filter((a) => a.id !== att.id) });
   };
 
   const onDrop = (e: DragEvent) => {
@@ -119,11 +142,11 @@ export function MessageComposer({ value, onChange, disabled }: { value: MessageD
         <div className="border-t border-white/8 p-3">
           <div className="grid gap-2 sm:grid-cols-2">
             {value.attachments.map((att) => (
-              <AttachmentCard key={att.uploadId} att={att} disabled={disabled} onRemove={() => void remove(att)} onToggleVoice={(v) => onChange({ ...value, attachments: value.attachments.map((a) => (a.uploadId === att.uploadId ? { ...a, asVoice: v } : a)) })} />
+              <AttachmentCard key={att.id} att={att} disabled={disabled} onRemove={() => remove(att)} onToggleVoice={(v) => onChange({ ...value, attachments: value.attachments.map((a) => (a.id === att.id ? { ...a, asVoice: v } : a)) })} />
             ))}
             {uploading > 0 && (
               <div className="flex items-center gap-3 rounded-xl border border-dashed border-white/15 px-3 py-3 text-xs text-slate-400">
-                <Spinner /> Enviando {uploading} arquivo{uploading > 1 ? "s" : ""}…
+                <Spinner /> Lendo {uploading} arquivo{uploading > 1 ? "s" : ""}…
               </div>
             )}
           </div>
@@ -134,7 +157,7 @@ export function MessageComposer({ value, onChange, disabled }: { value: MessageD
 }
 
 function AttachmentCard({ att, onRemove, onToggleVoice, disabled }: { att: Attachment; onRemove: () => void; onToggleVoice: (v: boolean) => void; disabled?: boolean }) {
-  const url = `/api/upload/${att.uploadId}?mime=${encodeURIComponent(att.mime)}`;
+  const url = att.dataUrl;
   const Icon = att.kind === "image" ? ImageIcon : att.kind === "video" ? Film : att.kind === "audio" ? Music : FileText;
   return (
     <div className="flex items-center gap-3 rounded-xl border border-white/10 bg-white/[0.03] p-2 pr-2.5">

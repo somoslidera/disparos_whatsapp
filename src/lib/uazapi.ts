@@ -6,6 +6,8 @@ import { isGroupJid, jidToPhone, toContactJid } from "./phone";
  * Docs: https://docs.uazapi.com
  *
  * Autenticação: header `token` com o token da instância.
+ * As credenciais vêm do navegador (headers x-uazapi-url / x-uazapi-token)
+ * ou, como alternativa para instalação própria, das variáveis de ambiente.
  */
 
 export class UazapiError extends Error {
@@ -19,32 +21,33 @@ export class UazapiError extends Error {
   }
 }
 
-function config() {
-  const url = (process.env.UAZAPI_URL || "").replace(/\/+$/, "");
-  const token = process.env.UAZAPI_TOKEN || "";
-  if (!url || !token) {
-    throw new UazapiError(
-      "Configure UAZAPI_URL e UAZAPI_TOKEN no arquivo .env para conectar ao uazapi.",
-      500,
-      null,
-    );
-  }
-  return { url, token };
+export interface Creds {
+  url: string;
+  token: string;
 }
 
-export function isConfigured(): boolean {
-  return Boolean(process.env.UAZAPI_URL && process.env.UAZAPI_TOKEN);
+function normalizeCreds(creds: Creds): Creds {
+  const url = (creds.url || "").trim().replace(/\/+$/, "");
+  const token = (creds.token || "").trim();
+  if (!url || !token) {
+    throw new UazapiError("Informe a URL do servidor e o token da instância do uazapi na tela Conexão.", 428, null);
+  }
+  if (!/^https?:\/\//i.test(url)) {
+    throw new UazapiError("A URL do uazapi deve começar com https://", 400, null);
+  }
+  return { url, token };
 }
 
 type Json = Record<string, unknown>;
 
 async function request<T = Json>(
+  creds: Creds,
   method: "GET" | "POST" | "PUT" | "DELETE",
   path: string,
   body?: unknown,
   opts: { timeoutMs?: number } = {},
 ): Promise<T> {
-  const { url, token } = config();
+  const { url, token } = normalizeCreds(creds);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? 60_000);
   try {
@@ -144,18 +147,18 @@ function normalizeStatus(data: Json): InstanceStatus {
   };
 }
 
-export async function getInstanceStatus(): Promise<InstanceStatus> {
-  const data = await request<Json>("GET", "/instance/status");
+export async function getInstanceStatus(creds: Creds): Promise<InstanceStatus> {
+  const data = await request<Json>(creds, "GET", "/instance/status");
   return normalizeStatus(data);
 }
 
-export async function connectInstance(phone?: string): Promise<InstanceStatus> {
-  const data = await request<Json>("POST", "/instance/connect", phone ? { phone } : {});
+export async function connectInstance(creds: Creds, phone?: string): Promise<InstanceStatus> {
+  const data = await request<Json>(creds, "POST", "/instance/connect", phone ? { phone } : {});
   return normalizeStatus(data);
 }
 
-export async function disconnectInstance(): Promise<void> {
-  await request("POST", "/instance/disconnect", {});
+export async function disconnectInstance(creds: Creds): Promise<void> {
+  await request(creds, "POST", "/instance/disconnect", {});
 }
 
 // ---------------------------------------------------------------------------
@@ -176,8 +179,8 @@ function asArray(data: unknown, ...keys: string[]): Json[] {
   return [];
 }
 
-export async function listGroups(force = false): Promise<WaGroup[]> {
-  const data = await request<unknown>("GET", `/group/list?force=${force ? "true" : "false"}`, undefined, {
+export async function listGroups(creds: Creds, force = false): Promise<WaGroup[]> {
+  const data = await request<unknown>(creds, "GET", `/group/list?force=${force ? "true" : "false"}`, undefined, {
     timeoutMs: 120_000,
   });
   const groups = asArray(data, "groups", "data", "items");
@@ -238,13 +241,13 @@ function normalizeContact(c: Json): WaContact | null {
 }
 
 /** Lista contatos combinando a agenda (/contacts) e as conversas (/chat/find). */
-export async function listContacts(): Promise<WaContact[]> {
+export async function listContacts(creds: Creds): Promise<WaContact[]> {
   const map = new Map<string, WaContact>();
   const errors: string[] = [];
 
   // 1) Agenda de contatos
   try {
-    const data = await request<unknown>("GET", "/contacts", undefined, { timeoutMs: 120_000 });
+    const data = await request<unknown>(creds, "GET", "/contacts", undefined, { timeoutMs: 120_000 });
     for (const raw of asArray(data, "contacts", "data", "items")) {
       const c = normalizeContact(raw);
       if (c) map.set(c.id, c);
@@ -256,6 +259,7 @@ export async function listContacts(): Promise<WaContact[]> {
   // 2) Conversas (inclui pessoas fora da agenda)
   try {
     const data = await request<unknown>(
+      creds,
       "POST",
       "/chat/find",
       { operator: "AND", sort: "-wa_lastMsgTimestamp", limit: 2000, offset: 0 },
@@ -299,8 +303,8 @@ function extractMessageId(data: unknown): string | undefined {
   return undefined;
 }
 
-export async function sendText(number: string, text: string): Promise<SendResult> {
-  const data = await request<unknown>("POST", "/send/text", { number, text, linkPreview: true });
+export async function sendText(creds: Creds, number: string, text: string): Promise<SendResult> {
+  const data = await request<unknown>(creds, "POST", "/send/text", { number, text, linkPreview: true });
   return { messageId: extractMessageId(data), raw: data };
 }
 
@@ -316,7 +320,7 @@ export interface SendMediaInput {
   mimetype?: string;
 }
 
-export async function sendMedia(input: SendMediaInput): Promise<SendResult> {
+export async function sendMedia(creds: Creds, input: SendMediaInput): Promise<SendResult> {
   const body: Json = {
     number: input.number,
     type: input.type,
@@ -325,6 +329,6 @@ export async function sendMedia(input: SendMediaInput): Promise<SendResult> {
   if (input.caption) body.text = input.caption;
   if (input.fileName) body.docName = input.fileName;
   if (input.mimetype) body.mimetype = input.mimetype;
-  const data = await request<unknown>("POST", "/send/media", body, { timeoutMs: 180_000 });
+  const data = await request<unknown>(creds, "POST", "/send/media", body, { timeoutMs: 180_000 });
   return { messageId: extractMessageId(data), raw: data };
 }

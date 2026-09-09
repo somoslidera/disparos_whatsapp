@@ -2,10 +2,12 @@
 
 import { FileText, Mic, Play } from "lucide-react";
 import { renderWhatsAppText } from "@/lib/wa-format";
-import type { MessageDraft } from "@/lib/types";
+import type { AttachmentMeta, MessageDraft } from "@/lib/types";
+
+type PreviewMessage = { text: string; attachments: (AttachmentMeta & { dataUrl?: string })[] };
 
 /** Pré-visualização em estilo de balão do WhatsApp. */
-export function MessagePreview({ message }: { message: MessageDraft }) {
+export function MessagePreview({ message }: { message: MessageDraft | PreviewMessage }) {
   const text = message.text.trim();
   const attachments = message.attachments;
   const captionIdx = attachments.findIndex((a) => a.kind !== "audio");
@@ -36,17 +38,20 @@ export function MessagePreview({ message }: { message: MessageDraft }) {
       ) : (
         <div className="ml-auto flex max-w-[92%] flex-col items-end gap-1.5">
           {attachments.map((att, i) => {
-            const url = `/api/upload/${att.uploadId}?mime=${encodeURIComponent(att.mime)}`;
+            const url = att.dataUrl;
             const caption = i === captionIdx && text;
             return (
-              <div key={att.uploadId} className="w-full max-w-[300px] overflow-hidden rounded-xl rounded-tr-sm bg-[#005c4b] p-1 text-[13px] text-white shadow">
-                {att.kind === "image" && (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img src={url} alt="" className="max-h-64 w-full rounded-lg object-cover" />
-                )}
+              <div key={att.id} className="w-full max-w-[300px] overflow-hidden rounded-xl rounded-tr-sm bg-[#005c4b] p-1 text-[13px] text-white shadow">
+                {att.kind === "image" &&
+                  (url ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={url} alt="" className="max-h-64 w-full rounded-lg object-cover" />
+                  ) : (
+                    <div className="flex h-28 items-center justify-center rounded-lg bg-black/20 text-xs text-white/70">{att.name}</div>
+                  ))}
                 {att.kind === "video" && (
                   <div className="relative">
-                    <video src={url} className="max-h-64 w-full rounded-lg object-cover" muted />
+                    {url ? <video src={url} className="max-h-64 w-full rounded-lg object-cover" muted /> : <div className="flex h-28 items-center justify-center rounded-lg bg-black/20 text-xs text-white/70">{att.name}</div>}
                     <span className="absolute inset-0 flex items-center justify-center">
                       <span className="flex h-12 w-12 items-center justify-center rounded-full bg-black/50">
                         <Play className="h-5 w-5 fill-white text-white" />

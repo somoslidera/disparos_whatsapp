@@ -3,15 +3,15 @@
 import clsx from "clsx";
 import { Layers, Pencil, Plus, Send, Trash2, User, Users } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { toast } from "sonner";
-import { api } from "@/lib/client";
-import type { SelectionItem } from "@/lib/audiences";
+import { deleteAudience, getAudiences, saveAudience } from "@/lib/store";
+import { wouldCreateCycle, type SelectionItem } from "@/lib/audiences";
 import type { Audience } from "@/lib/types";
 import { useData, type AudienceWithTotal } from "./data-provider";
 import { RecipientPicker } from "./recipient-picker";
 import { SelectionSummary } from "./selection-summary";
-import { EmptyState, Modal, PageHeader, Skeleton, Spinner } from "./ui";
+import { EmptyState, Modal, PageHeader, Spinner } from "./ui";
 
 const COLORS: Record<string, string> = {
   emerald: "from-emerald-400 to-teal-600",
@@ -23,25 +23,15 @@ const COLORS: Record<string, string> = {
 };
 
 export function AudiencesPage() {
-  const { audiences, loadAudiences } = useData();
+  const { audiences } = useData();
   const [editing, setEditing] = useState<Audience | null | "new">(null);
   const [deleting, setDeleting] = useState<AudienceWithTotal | null>(null);
 
-  useEffect(() => {
-    if (!audiences.loaded) void loadAudiences();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const remove = async () => {
+  const remove = () => {
     if (!deleting) return;
-    try {
-      await api(`/api/audiences/${deleting.id}`, { method: "DELETE" });
-      toast.success("Lista excluída.");
-      setDeleting(null);
-      void loadAudiences();
-    } catch (err) {
-      toast.error((err as Error).message);
-    }
+    deleteAudience(deleting.id);
+    toast.success("Lista excluída.");
+    setDeleting(null);
   };
 
   return (
@@ -56,13 +46,7 @@ export function AudiencesPage() {
         }
       />
 
-      {audiences.loading && !audiences.loaded ? (
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-          {Array.from({ length: 3 }).map((_, i) => (
-            <Skeleton key={i} className="h-40" />
-          ))}
-        </div>
-      ) : audiences.data.length === 0 ? (
+      {audiences.length === 0 ? (
         <div className="card">
           <EmptyState
             icon={<Layers className="h-5 w-5" />}
@@ -77,7 +61,7 @@ export function AudiencesPage() {
         </div>
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-          {audiences.data.map((a) => {
+          {audiences.map((a) => {
             const c = a.members.filter((m) => m.type === "contact").length;
             const g = a.members.filter((m) => m.type === "group").length;
             const l = a.members.filter((m) => m.type === "audience").length;
@@ -127,10 +111,7 @@ export function AudiencesPage() {
         <AudienceEditor
           audience={editing === "new" ? null : editing}
           onClose={() => setEditing(null)}
-          onSaved={() => {
-            setEditing(null);
-            void loadAudiences();
-          }}
+          onSaved={() => setEditing(null)}
         />
       )}
 
@@ -164,16 +145,21 @@ function AudienceEditor({ audience, onClose, onSaved }: { audience: Audience | n
   const [members, setMembers] = useState<SelectionItem[]>(audience?.members || []);
   const [saving, setSaving] = useState(false);
 
-  const save = async () => {
+  const save = () => {
     if (!name.trim()) {
       toast.error("Dê um nome à lista.");
       return;
     }
     setSaving(true);
     try {
-      const body = JSON.stringify({ name, description, color, members });
-      if (audience) await api(`/api/audiences/${audience.id}`, { method: "PUT", body });
-      else await api("/api/audiences", { method: "POST", body });
+      if (audience) {
+        for (const m of members) {
+          if (m.type === "audience" && wouldCreateCycle(audience.id, m.id, getAudiences())) {
+            throw new Error(`A lista "${m.name}" já contém esta lista (referência circular).`);
+          }
+        }
+      }
+      saveAudience({ id: audience?.id, name: name.trim(), description: description.trim(), color, members });
       toast.success(audience ? "Lista atualizada." : "Lista criada.");
       onSaved();
     } catch (err) {
