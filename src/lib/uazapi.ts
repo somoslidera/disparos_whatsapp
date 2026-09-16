@@ -1,4 +1,4 @@
-import type { InstanceStatus, WaContact, WaGroup } from "./types";
+import type { InstanceStatus, WaContact, WaGroup, WaParticipant } from "./types";
 import { isGroupJid, jidToPhone, toContactJid } from "./phone";
 
 /**
@@ -204,6 +204,54 @@ export async function listGroups(creds: Creds, force = false): Promise<WaGroup[]
   }
   out.sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
   return out;
+}
+
+function normalizeParticipant(p: Json): WaParticipant | null {
+  const rawJid = str(pick(p, "JID", "jid", "id", "participant"));
+  const phoneRaw = str(pick(p, "PhoneNumber", "phoneNumber", "phone", "number"));
+  if (!rawJid && !phoneRaw) return null;
+  // Em grupos novos o WhatsApp entrega o LID (@lid); quando o número vem junto, preferimos o jid do telefone.
+  const isLid = /@lid$/i.test(rawJid);
+  const id = isLid && phoneRaw ? toContactJid(phoneRaw) : rawJid || toContactJid(phoneRaw);
+  if (isGroupJid(id)) return null;
+  const phone = /@lid$/i.test(id) ? jidToPhone(phoneRaw) : jidToPhone(id);
+  const name = str(pick(p, "DisplayName", "displayName", "name", "PushName", "pushName", "notify", "wa_contactName", "wa_name"));
+  return {
+    id,
+    phone,
+    name: name || (phone ? "" : "Número oculto"),
+    isAdmin: Boolean(p.IsAdmin || p.isAdmin || p.IsSuperAdmin || p.isSuperAdmin || p.admin),
+  };
+}
+
+function participantsOf(g: Json): WaParticipant[] {
+  const raw = pick(g, "Participants", "participants", "members");
+  if (!Array.isArray(raw)) return [];
+  const out = new Map<string, WaParticipant>();
+  for (const item of raw) {
+    const p = typeof item === "string" ? { JID: item } : (item as Json);
+    const n = normalizeParticipant(p);
+    if (n && !out.has(n.id)) out.set(n.id, n);
+  }
+  return [...out.values()];
+}
+
+/** Participantes de um grupo: tenta /group/info e, se vier vazio, usa a lista de grupos. */
+export async function getGroupParticipants(creds: Creds, groupJid: string): Promise<WaParticipant[]> {
+  let participants: WaParticipant[] = [];
+  try {
+    const data = await request<Json>(creds, "GET", `/group/info?groupjid=${encodeURIComponent(groupJid)}`, undefined, { timeoutMs: 60_000 });
+    const g = (data.group as Json) || (data.data as Json) || data;
+    participants = participantsOf(g);
+  } catch (err) {
+    if ((err as UazapiError).status === 428 || (err as UazapiError).status === 400) throw err;
+  }
+  if (participants.length === 0) {
+    const data = await request<unknown>(creds, "GET", "/group/list?force=false", undefined, { timeoutMs: 120_000 });
+    const g = asArray(data, "groups", "data", "items").find((x) => str(pick(x, "JID", "jid", "id", "groupId", "wa_chatid")) === groupJid);
+    if (g) participants = participantsOf(g);
+  }
+  return participants.sort((a, b) => (a.name || a.phone).localeCompare(b.name || b.phone, "pt-BR"));
 }
 
 function normalizeContact(c: Json): WaContact | null {

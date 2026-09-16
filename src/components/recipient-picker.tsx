@@ -1,12 +1,14 @@
 "use client";
 
 import clsx from "clsx";
-import { AlertCircle, Layers, Plus, RefreshCw, User, Users } from "lucide-react";
+import { AlertCircle, Layers, Plus, RefreshCw, User, UserRoundSearch, Users } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { formatPhone, onlyDigits, toContactJid } from "@/lib/phone";
 import type { SelectionItem } from "@/lib/audiences";
+import type { WaGroup } from "@/lib/types";
 import { useData } from "./data-provider";
+import { GroupMembersModal } from "./group-members";
 import { Avatar, Checkbox, EmptyState, SearchInput, Skeleton, Spinner } from "./ui";
 
 type Tab = "contacts" | "groups" | "audiences";
@@ -36,6 +38,7 @@ export function RecipientPicker({
   const [tab, setTab] = useState<Tab>("contacts");
   const [query, setQuery] = useState("");
   const [manual, setManual] = useState("");
+  const [membersOf, setMembersOf] = useState<WaGroup | null>(null);
 
   useEffect(() => {
     if (!contacts.loaded && !contacts.loading) void loadContacts();
@@ -216,12 +219,13 @@ export function RecipientPicker({
             {filtered.map((row) => {
               const isSel = selected.has(`${row.type}:${row.id}`);
               return (
-                <li key={`${row.type}:${row.id}`}>
+                <li key={`${row.type}:${row.id}`} className="group/row relative">
                   <button
                     type="button"
                     onClick={() => toggle(row)}
                     className={clsx(
                       "flex w-full items-center gap-3 rounded-xl px-2.5 py-2 text-left transition",
+                      row.type === "group" && "pr-24",
                       isSel ? "bg-brand-500/10" : "hover:bg-white/[0.04]",
                     )}
                   >
@@ -238,12 +242,24 @@ export function RecipientPicker({
                       <span className="block truncate text-xs text-slate-500">{row.subtitle}</span>
                     </span>
                   </button>
+                  {row.type === "group" && (
+                    <button
+                      type="button"
+                      onClick={() => setMembersOf(groups.data.find((g) => g.id === row.id) || { id: row.id, name: row.name, participants: 0 })}
+                      className="btn-secondary absolute top-1/2 right-2 h-8 -translate-y-1/2 gap-1.5 px-2.5 text-xs"
+                      title="Enviar no privado dos membros"
+                    >
+                      <UserRoundSearch className="h-3.5 w-3.5" /> Membros
+                    </button>
+                  )}
                 </li>
               );
             })}
           </ul>
         )}
       </div>
+
+      {membersOf && <GroupMembersModal group={membersOf} value={value} onChange={onChange} onClose={() => setMembersOf(null)} />}
     </div>
   );
 }

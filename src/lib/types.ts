@@ -14,6 +14,13 @@ export interface WaGroup {
   image?: string | null;
 }
 
+export interface WaParticipant {
+  id: string; // jid (telefone ou @lid)
+  phone: string; // apenas dígitos; vazio quando o WhatsApp oculta o número
+  name: string;
+  isAdmin: boolean;
+}
+
 export type MemberType = RecipientType | "audience";
 
 export interface AudienceMember {

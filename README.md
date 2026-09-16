@@ -3,6 +3,7 @@
 Aplicativo para envio de mensagens em massa no WhatsApp, conectado ao seu número através do [uazapi](https://uazapi.com).
 
 - Dispara para **contatos individuais** e **grupos do WhatsApp**
+- Em cada grupo, botão **Membros**: envie no grupo, no privado de membros escolhidos, ou nos dois
 - **Minhas listas**: crie listas com contatos, grupos e até outras listas. Ao selecionar a lista, todos recebem.
 - Mensagem com **texto, imagens, vídeos, áudios (mensagem de voz ou arquivo) e documentos**
 - Pré-visualização em estilo WhatsApp, formatação (*negrito*, _itálico_, ~tachado~)
@@ -77,6 +78,7 @@ Nunca versione o `.env`: ele já está no `.gitignore`.
 | `POST /instance/connect`     | QR code / código de pareamento         |
 | `POST /instance/disconnect`  | Desconectar                            |
 | `GET /group/list`            | Grupos do WhatsApp                     |
+| `GET /group/info`            | Membros de um grupo                    |
 | `GET /contacts`              | Agenda de contatos                     |
 | `POST /chat/find`            | Conversas (contatos fora da agenda)    |
 | `POST /send/text`            | Texto                                  |
