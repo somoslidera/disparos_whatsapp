@@ -1,17 +1,24 @@
 "use client";
 
 import { FileText, Mic, Play } from "lucide-react";
+import { personalize } from "@/lib/personalize";
 import { renderWhatsAppText } from "@/lib/wa-format";
-import type { AttachmentMeta, MessageDraft } from "@/lib/types";
+import type { AttachmentMeta, MessageDraft, StoredMessage } from "@/lib/types";
 
-type PreviewMessage = { text: string; attachments: (AttachmentMeta & { dataUrl?: string })[] };
+type PreviewBlock = { id: string; text: string; attachments: (AttachmentMeta & { dataUrl?: string })[] };
 
-/** Pré-visualização em estilo de balão do WhatsApp. */
-export function MessagePreview({ message }: { message: MessageDraft | PreviewMessage }) {
-  const text = message.text.trim();
-  const attachments = message.attachments;
-  const captionIdx = attachments.findIndex((a) => a.kind !== "audio");
-  const empty = !text && attachments.length === 0;
+/** Pré-visualização em estilo de balão do WhatsApp, um balão por bloco. */
+export function MessagePreview({
+  message,
+  sampleName,
+  nameFallback = "",
+}: {
+  message: MessageDraft | StoredMessage;
+  /** Nome usado para mostrar como {nome} ficará (ex.: primeiro contato selecionado) */
+  sampleName?: string | null;
+  nameFallback?: string;
+}) {
+  const blocks = (message.blocks as PreviewBlock[]).filter((b) => b.text.trim() || b.attachments.length > 0);
   const now = new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
 
   const time = (
@@ -33,67 +40,74 @@ export function MessagePreview({ message }: { message: MessageDraft | PreviewMes
         backgroundSize: "18px 18px",
       }}
     >
-      {empty ? (
+      {blocks.length === 0 ? (
         <p className="py-10 text-center text-xs text-slate-500">A pré-visualização aparece aqui conforme você escreve.</p>
       ) : (
         <div className="ml-auto flex max-w-[92%] flex-col items-end gap-1.5">
-          {attachments.map((att, i) => {
-            const url = att.dataUrl;
-            const caption = i === captionIdx && text;
+          {blocks.map((block) => {
+            const text = personalize(block.text.trim(), sampleName, nameFallback);
+            const attachments = block.attachments;
+            const captionIdx = attachments.findIndex((a) => a.kind !== "audio");
             return (
-              <div key={att.id} className="w-full max-w-[300px] overflow-hidden rounded-xl rounded-tr-sm bg-[#005c4b] p-1 text-[13px] text-white shadow">
-                {att.kind === "image" &&
-                  (url ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img src={url} alt="" className="max-h-64 w-full rounded-lg object-cover" />
-                  ) : (
-                    <div className="flex h-28 items-center justify-center rounded-lg bg-black/20 text-xs text-white/70">{att.name}</div>
-                  ))}
-                {att.kind === "video" && (
-                  <div className="relative">
-                    {url ? <video src={url} className="max-h-64 w-full rounded-lg object-cover" muted /> : <div className="flex h-28 items-center justify-center rounded-lg bg-black/20 text-xs text-white/70">{att.name}</div>}
-                    <span className="absolute inset-0 flex items-center justify-center">
-                      <span className="flex h-12 w-12 items-center justify-center rounded-full bg-black/50">
-                        <Play className="h-5 w-5 fill-white text-white" />
-                      </span>
-                    </span>
-                  </div>
-                )}
-                {att.kind === "audio" && (
-                  <div className="flex items-center gap-2 px-2 py-2">
-                    <span className="flex h-8 w-8 items-center justify-center rounded-full bg-white/15">{att.asVoice !== false ? <Mic className="h-4 w-4" /> : <Play className="h-4 w-4 fill-white" />}</span>
-                    <span className="flex h-1 flex-1 items-center gap-0.5">
-                      {Array.from({ length: 28 }).map((_, j) => (
-                        <span key={j} className="w-1 rounded-full bg-white/60" style={{ height: 4 + ((j * 7) % 11) }} />
-                      ))}
-                    </span>
-                  </div>
-                )}
-                {att.kind === "document" && (
-                  <div className="flex items-center gap-2 rounded-lg bg-black/20 px-3 py-2">
-                    <FileText className="h-5 w-5 shrink-0 text-rose-200" />
-                    <span className="truncate">{att.name}</span>
-                  </div>
-                )}
-                {caption ? (
-                  <p className="px-2 pt-1.5 pb-1 whitespace-pre-wrap">
+              <div key={block.id} className="flex w-full flex-col items-end gap-1.5">
+                {attachments.map((att, i) => {
+                  const url = att.dataUrl;
+                  const caption = i === captionIdx && text;
+                  return (
+                    <div key={att.id} className="w-full max-w-[300px] overflow-hidden rounded-xl rounded-tr-sm bg-[#005c4b] p-1 text-[13px] text-white shadow">
+                      {att.kind === "image" &&
+                        (url ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={url} alt="" className="max-h-64 w-full rounded-lg object-cover" />
+                        ) : (
+                          <div className="flex h-28 items-center justify-center rounded-lg bg-black/20 text-xs text-white/70">{att.name}</div>
+                        ))}
+                      {att.kind === "video" && (
+                        <div className="relative">
+                          {url ? <video src={url} className="max-h-64 w-full rounded-lg object-cover" muted /> : <div className="flex h-28 items-center justify-center rounded-lg bg-black/20 text-xs text-white/70">{att.name}</div>}
+                          <span className="absolute inset-0 flex items-center justify-center">
+                            <span className="flex h-12 w-12 items-center justify-center rounded-full bg-black/50">
+                              <Play className="h-5 w-5 fill-white text-white" />
+                            </span>
+                          </span>
+                        </div>
+                      )}
+                      {att.kind === "audio" && (
+                        <div className="flex items-center gap-2 px-2 py-2">
+                          <span className="flex h-8 w-8 items-center justify-center rounded-full bg-white/15">{att.asVoice !== false ? <Mic className="h-4 w-4" /> : <Play className="h-4 w-4 fill-white" />}</span>
+                          <span className="flex h-1 flex-1 items-center gap-0.5">
+                            {Array.from({ length: 28 }).map((_, j) => (
+                              <span key={j} className="w-1 rounded-full bg-white/60" style={{ height: 4 + ((j * 7) % 11) }} />
+                            ))}
+                          </span>
+                        </div>
+                      )}
+                      {att.kind === "document" && (
+                        <div className="flex items-center gap-2 rounded-lg bg-black/20 px-3 py-2">
+                          <FileText className="h-5 w-5 shrink-0 text-rose-200" />
+                          <span className="truncate">{att.name}</span>
+                        </div>
+                      )}
+                      {caption ? (
+                        <p className="px-2 pt-1.5 pb-1 whitespace-pre-wrap">
+                          {renderWhatsAppText(text)}
+                          {time}
+                        </p>
+                      ) : (
+                        <p className="px-2 pb-0.5 text-right">{time}</p>
+                      )}
+                    </div>
+                  );
+                })}
+                {text && captionIdx === -1 && (
+                  <div className="max-w-full rounded-xl rounded-tr-sm bg-[#005c4b] px-3 py-2 text-[13px] whitespace-pre-wrap text-white shadow">
                     {renderWhatsAppText(text)}
                     {time}
-                  </p>
-                ) : (
-                  <p className="px-2 pb-0.5 text-right">
-                    {time}
-                  </p>
+                  </div>
                 )}
               </div>
             );
           })}
-          {text && captionIdx === -1 && (
-            <div className="max-w-full rounded-xl rounded-tr-sm bg-[#005c4b] px-3 py-2 text-[13px] whitespace-pre-wrap text-white shadow">
-              {renderWhatsAppText(text)}
-              {time}
-            </div>
-          )}
         </div>
       )}
     </div>

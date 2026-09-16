@@ -1,7 +1,7 @@
 "use client";
 
 import { nanoid } from "nanoid";
-import type { Audience, Campaign } from "./types";
+import type { Audience, Campaign, StoredMessage } from "./types";
 
 /**
  * Persistência no navegador (localStorage): listas e histórico de campanhas.
@@ -60,13 +60,25 @@ export function getAudiences(): Audience[] {
   return audiences;
 }
 
+/** Converte campanhas salvas no formato antigo (mensagem única) para blocos. */
+function normalizeMessage(raw: unknown): StoredMessage {
+  const m = (raw || {}) as { blocks?: StoredMessage["blocks"]; text?: string; attachments?: StoredMessage["blocks"][number]["attachments"] };
+  if (Array.isArray(m.blocks)) return { blocks: m.blocks };
+  return { blocks: [{ id: "b1", text: m.text || "", attachments: Array.isArray(m.attachments) ? m.attachments : [] }] };
+}
+
 export function getCampaigns(): Campaign[] {
   if (typeof window === "undefined") return EMPTY_CAMPAIGNS;
   if (!campaigns) {
     campaigns = load<Campaign>(KEY_CAMPAIGNS);
-    // Campanhas interrompidas por recarregamento da página
+    // Campanhas interrompidas por recarregamento da página + migração de formato
     let changed = false;
     for (const c of campaigns) {
+      const msg = c.message as unknown as { blocks?: unknown };
+      if (!Array.isArray(msg?.blocks)) {
+        c.message = normalizeMessage(c.message);
+        changed = true;
+      }
       if (c.status === "running" || c.status === "queued") {
         for (const r of c.recipients) if (r.status === "pending" || r.status === "sending") r.status = "cancelled";
         c.status = "cancelled";

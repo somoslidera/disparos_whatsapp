@@ -1,6 +1,6 @@
 "use client";
 
-import { History, Layers, Paperclip, Trash2, User, Users } from "lucide-react";
+import { CalendarClock, History, Layers, Paperclip, Trash2, User, Users } from "lucide-react";
 import Link from "next/link";
 import { useMemo, useState, useSyncExternalStore } from "react";
 import { toast } from "sonner";
@@ -13,6 +13,8 @@ import { Badge, EmptyState, Modal, PageHeader } from "./ui";
 
 type Summary = Campaign & { counts: ReturnType<typeof counts> };
 
+const attachmentCount = (c: Campaign) => c.message.blocks.reduce((n, b) => n + b.attachments.length, 0);
+
 export function HistoryPage() {
   const campaigns = useSyncExternalStore(subscribeStore, getCampaigns, getServerCampaigns);
   const items = useMemo<Summary[]>(() => campaigns.map((c) => ({ ...c, counts: counts(c.recipients) })), [campaigns]);
@@ -20,7 +22,7 @@ export function HistoryPage() {
 
   const remove = () => {
     if (!deleting) return;
-    if (isRunning(deleting.id)) {
+    if (isRunning(deleting.id) || deleting.status === "scheduled") {
       toast.error("Cancele a campanha antes de excluí-la.");
       return;
     }
@@ -55,13 +57,19 @@ export function HistoryPage() {
                   <div className="flex flex-wrap items-center gap-2">
                     <h3 className="truncate font-medium text-white">{c.name}</h3>
                     <Badge tone={statusTone(c.status)}>{statusLabel(c.status)}</Badge>
-                    {c.message.attachments.length > 0 && (
+                    {c.status === "scheduled" && c.scheduledFor && (
+                      <Badge tone="info">
+                        <CalendarClock className="h-3 w-3" /> {formatDate(c.scheduledFor)}
+                      </Badge>
+                    )}
+                    {c.message.blocks.length > 1 && <Badge>{c.message.blocks.length} blocos</Badge>}
+                    {attachmentCount(c) > 0 && (
                       <Badge>
-                        <Paperclip className="h-3 w-3" /> {c.message.attachments.length}
+                        <Paperclip className="h-3 w-3" /> {attachmentCount(c)}
                       </Badge>
                     )}
                   </div>
-                  <p className="mt-1 line-clamp-1 text-xs text-slate-400">{c.message.text || "(sem texto)"}</p>
+                  <p className="mt-1 line-clamp-1 text-xs text-slate-400">{c.message.blocks.map((b) => b.text).filter(Boolean).join(" · ") || "(sem texto)"}</p>
                   <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-500">
                     <span>{formatDate(c.createdAt)}</span>
                     {c.sources.slice(0, 4).map((s) => (
@@ -87,7 +95,7 @@ export function HistoryPage() {
                       </div>
                     </div>
                   </div>
-                  <button type="button" onClick={() => setDeleting(c)} disabled={c.status === "running"} className="btn-ghost h-8 w-8 p-0 text-slate-500 hover:text-rose-300" title="Excluir do histórico">
+                  <button type="button" onClick={() => setDeleting(c)} disabled={c.status === "running" || c.status === "scheduled"} className="btn-ghost h-8 w-8 p-0 text-slate-500 hover:text-rose-300" title="Excluir do histórico">
                     <Trash2 className="h-4 w-4" />
                   </button>
                 </div>

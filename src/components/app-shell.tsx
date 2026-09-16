@@ -3,9 +3,33 @@
 import clsx from "clsx";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { History, Menu, QrCode, Send, Users, X } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { CalendarClock, History, Menu, QrCode, Send, Users, X } from "lucide-react";
+import { useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
+import { resumeScheduled } from "@/lib/campaign-client";
+import { getCampaigns, getServerCampaigns, subscribe as subscribeStore } from "@/lib/store";
 import { useData } from "./data-provider";
+
+/** Rearma agendamentos ao abrir o app e mostra um aviso enquanto houver disparo agendado. */
+function ScheduledBanner() {
+  const campaigns = useSyncExternalStore(subscribeStore, getCampaigns, getServerCampaigns);
+  useEffect(() => {
+    const t = setTimeout(() => resumeScheduled(), 0);
+    return () => clearTimeout(t);
+  }, []);
+  const scheduled = campaigns.filter((c) => c.status === "scheduled" && c.scheduledFor).sort((a, b) => (a.scheduledFor! < b.scheduledFor! ? -1 : 1));
+  if (scheduled.length === 0) return null;
+  const next = scheduled[0];
+  const when = new Date(next.scheduledFor!).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+  return (
+    <Link href={`/historico/${next.id}`} className="mb-5 flex items-center gap-3 rounded-xl border border-sky-500/25 bg-sky-500/10 px-4 py-2.5 text-sm text-sky-100 transition hover:bg-sky-500/15">
+      <CalendarClock className="h-4 w-4 shrink-0 text-sky-300" />
+      <span className="min-w-0 flex-1 truncate">
+        {scheduled.length === 1 ? `Disparo agendado para ${when}` : `${scheduled.length} disparos agendados · próximo em ${when}`} · mantenha esta aba aberta
+      </span>
+      <span className="text-xs text-sky-300">Ver</span>
+    </Link>
+  );
+}
 
 const NAV = [
   { href: "/", label: "Nova campanha", icon: Send },
@@ -121,7 +145,10 @@ export function AppShell({ children }: { children: ReactNode }) {
           <Logo />
           <ConnectionPill compact />
         </header>
-        <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-6 sm:px-6 lg:px-8 lg:py-8">{children}</main>
+        <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
+          <ScheduledBanner />
+          {children}
+        </main>
       </div>
     </div>
   );

@@ -1,12 +1,13 @@
 "use client";
 
 import clsx from "clsx";
-import { Bold, Code, FileText, Film, Image as ImageIcon, Italic, Mic, Music, Paperclip, Strikethrough, Trash2, UploadCloud } from "lucide-react";
-import { useCallback, useRef, useState, type DragEvent } from "react";
-import { toast } from "sonner";
+import { AtSign, Bold, ChevronDown, ChevronUp, Code, FileText, Film, Image as ImageIcon, Italic, Mic, Music, Paperclip, Strikethrough, Trash2, UploadCloud } from "lucide-react";
 import { nanoid } from "nanoid";
+import { useCallback, useEffect, useRef, useState, type DragEvent } from "react";
+import { toast } from "sonner";
 import { fileToDataUrl, formatBytes } from "@/lib/client";
-import type { Attachment, AttachmentKind, MessageDraft } from "@/lib/types";
+import { NAME_TAG } from "@/lib/personalize";
+import type { Attachment, AttachmentKind, MessageBlock } from "@/lib/types";
 import { Spinner, Toggle } from "./ui";
 
 const ACCEPT = "image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.zip";
@@ -24,24 +25,62 @@ function kindFromMime(mime: string, name: string): AttachmentKind {
   return "document";
 }
 
-export function MessageComposer({ value, onChange, disabled }: { value: MessageDraft; onChange: (next: MessageDraft) => void; disabled?: boolean }) {
+export function newBlock(): MessageBlock {
+  return { id: nanoid(8), text: "", attachments: [] };
+}
+
+interface Props {
+  value: MessageBlock;
+  onChange: (next: MessageBlock) => void;
+  disabled?: boolean;
+  /** Cabeçalho do bloco (quando há mais de um) */
+  index?: number;
+  total?: number;
+  onRemove?: () => void;
+  onMoveUp?: () => void;
+  onMoveDown?: () => void;
+  autoFocus?: boolean;
+}
+
+export function MessageComposer({ value, onChange, disabled, index = 0, total = 1, onRemove, onMoveUp, onMoveDown, autoFocus }: Props) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(0);
   const [dragging, setDragging] = useState(false);
+  // Seleção a aplicar depois que o React renderizar o novo texto (inserção pela barra de ferramentas)
+  const pendingSelection = useRef<[number, number] | null>(null);
 
-  const wrap = (marker: string) => {
+  useEffect(() => {
+    const sel = pendingSelection.current;
+    const el = textareaRef.current;
+    if (!sel || !el) return;
+    pendingSelection.current = null;
+    el.focus();
+    el.setSelectionRange(sel[0], sel[1]);
+  }, [value.text]);
+
+  const insertAtCursor = (before: string, after = "", placeholder = "") => {
     const el = textareaRef.current;
     if (!el) return;
-    const start = el.selectionStart;
-    const end = el.selectionEnd;
-    const sel = value.text.slice(start, end) || "texto";
-    const next = value.text.slice(0, start) + marker + sel + marker + value.text.slice(end);
+    const start = el.selectionStart ?? value.text.length;
+    const end = el.selectionEnd ?? start;
+    const sel = value.text.slice(start, end) || placeholder;
+    const next = value.text.slice(0, start) + before + sel + after + value.text.slice(end);
+    pendingSelection.current = [start + before.length, start + before.length + sel.length];
     onChange({ ...value, text: next });
-    requestAnimationFrame(() => {
-      el.focus();
-      el.setSelectionRange(start + marker.length, start + marker.length + sel.length);
-    });
+  };
+
+  const wrap = (marker: string) => insertAtCursor(marker, marker, "texto");
+  const insertName = () => {
+    const el = textareaRef.current;
+    const pos = el ? el.selectionStart : value.text.length;
+    const before = value.text.slice(0, pos);
+    const needsSpace = before.length > 0 && !/\s$/.test(before);
+    // Cursor fica depois de {nome}
+    const tag = `${needsSpace ? " " : ""}${NAME_TAG}`;
+    const next = value.text.slice(0, pos) + tag + value.text.slice(pos);
+    pendingSelection.current = [pos + tag.length, pos + tag.length];
+    onChange({ ...value, text: next });
   };
 
   const upload = useCallback(
@@ -49,7 +88,7 @@ export function MessageComposer({ value, onChange, disabled }: { value: MessageD
       const list = Array.from(files);
       if (!list.length) return;
       if (value.attachments.length + list.length > 10) {
-        toast.error("Máximo de 10 anexos por mensagem.");
+        toast.error("Máximo de 10 anexos por bloco.");
         return;
       }
       setUploading((n) => n + list.length);
@@ -81,9 +120,7 @@ export function MessageComposer({ value, onChange, disabled }: { value: MessageD
     [onChange, value],
   );
 
-  const remove = (att: Attachment) => {
-    onChange({ ...value, attachments: value.attachments.filter((a) => a.id !== att.id) });
-  };
+  const remove = (att: Attachment) => onChange({ ...value, attachments: value.attachments.filter((a) => a.id !== att.id) });
 
   const onDrop = (e: DragEvent) => {
     e.preventDefault();
@@ -91,6 +128,8 @@ export function MessageComposer({ value, onChange, disabled }: { value: MessageD
     if (disabled) return;
     void upload(e.dataTransfer.files);
   };
+
+  const multi = total > 1;
 
   return (
     <div
@@ -109,6 +148,24 @@ export function MessageComposer({ value, onChange, disabled }: { value: MessageD
         </div>
       )}
 
+      {multi && (
+        <div className="flex items-center gap-2 border-b border-white/8 px-3 py-2">
+          <span className="flex h-6 w-6 items-center justify-center rounded-md bg-brand-500/15 text-[11px] font-semibold text-brand-300">{index + 1}</span>
+          <span className="text-xs font-medium text-slate-300">Bloco {index + 1} de {total}</span>
+          <span className="ml-auto flex items-center gap-0.5">
+            <button type="button" onClick={onMoveUp} disabled={disabled || index === 0} className="btn-ghost h-7 w-7 rounded-lg p-0" title="Mover para cima">
+              <ChevronUp className="h-4 w-4" />
+            </button>
+            <button type="button" onClick={onMoveDown} disabled={disabled || index === total - 1} className="btn-ghost h-7 w-7 rounded-lg p-0" title="Mover para baixo">
+              <ChevronDown className="h-4 w-4" />
+            </button>
+            <button type="button" onClick={onRemove} disabled={disabled} className="btn-ghost h-7 w-7 rounded-lg p-0 text-slate-500 hover:text-rose-300" title="Remover bloco">
+              <Trash2 className="h-4 w-4" />
+            </button>
+          </span>
+        </div>
+      )}
+
       <div className="flex flex-wrap items-center gap-1 border-b border-white/8 px-3 py-2">
         {[
           { icon: Bold, marker: "*", title: "Negrito" },
@@ -121,6 +178,9 @@ export function MessageComposer({ value, onChange, disabled }: { value: MessageD
           </button>
         ))}
         <span className="mx-1 h-5 w-px bg-white/10" />
+        <button type="button" disabled={disabled} onClick={insertName} className="btn-ghost h-8 gap-1.5 rounded-lg px-2 text-xs text-brand-300 hover:text-brand-200" title="Insere o primeiro nome do contato">
+          <AtSign className="h-4 w-4" /> Nome
+        </button>
         <button type="button" disabled={disabled} onClick={() => fileRef.current?.click()} className="btn-ghost h-8 gap-1.5 rounded-lg px-2 text-xs">
           <Paperclip className="h-4 w-4" /> Anexar
         </button>
@@ -132,17 +192,24 @@ export function MessageComposer({ value, onChange, disabled }: { value: MessageD
         ref={textareaRef}
         value={value.text}
         disabled={disabled}
+        autoFocus={autoFocus}
         onChange={(e) => onChange({ ...value, text: e.target.value })}
-        placeholder={"Escreva sua mensagem…\n\nDica: use *negrito*, _itálico_ e ~tachado~ como no WhatsApp."}
-        rows={8}
-        className="min-h-[180px] w-full resize-y bg-transparent px-4 py-3 text-sm leading-relaxed text-slate-100 outline-none placeholder:text-slate-600"
+        placeholder={multi ? "Texto deste bloco…" : "Escreva sua mensagem…\n\nDica: use *negrito*, _itálico_ e ~tachado~ como no WhatsApp. Clique em “Nome” para inserir o primeiro nome do contato."}
+        rows={multi ? 4 : 8}
+        className={clsx("w-full resize-y bg-transparent px-4 py-3 text-sm leading-relaxed text-slate-100 outline-none placeholder:text-slate-600", multi ? "min-h-[100px]" : "min-h-[180px]")}
       />
 
       {(value.attachments.length > 0 || uploading > 0) && (
         <div className="border-t border-white/8 p-3">
           <div className="grid gap-2 sm:grid-cols-2">
             {value.attachments.map((att) => (
-              <AttachmentCard key={att.id} att={att} disabled={disabled} onRemove={() => remove(att)} onToggleVoice={(v) => onChange({ ...value, attachments: value.attachments.map((a) => (a.id === att.id ? { ...a, asVoice: v } : a)) })} />
+              <AttachmentCard
+                key={att.id}
+                att={att}
+                disabled={disabled}
+                onRemove={() => remove(att)}
+                onToggleVoice={(v) => onChange({ ...value, attachments: value.attachments.map((a) => (a.id === att.id ? { ...a, asVoice: v } : a)) })}
+              />
             ))}
             {uploading > 0 && (
               <div className="flex items-center gap-3 rounded-xl border border-dashed border-white/15 px-3 py-3 text-xs text-slate-400">

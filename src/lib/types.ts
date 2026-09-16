@@ -57,14 +57,25 @@ export interface Attachment extends AttachmentMeta {
   dataUrl: string;
 }
 
-export interface MessageDraft {
+/** Um bloco = uma mensagem enviada em sequência (texto e/ou anexos). */
+export interface MessageBlock {
+  id: string;
   text: string;
   attachments: Attachment[];
 }
 
-export interface StoredMessage {
+export interface MessageDraft {
+  blocks: MessageBlock[];
+}
+
+export interface StoredBlock {
+  id: string;
   text: string;
   attachments: AttachmentMeta[];
+}
+
+export interface StoredMessage {
+  blocks: StoredBlock[];
 }
 
 export type RecipientStatus = "pending" | "sending" | "sent" | "failed" | "cancelled";
@@ -78,11 +89,13 @@ export interface CampaignRecipient {
   sentAt?: string;
 }
 
-export type CampaignStatus = "queued" | "running" | "completed" | "cancelled" | "failed";
+export type CampaignStatus = "scheduled" | "queued" | "running" | "completed" | "cancelled" | "failed";
 
 export interface CampaignSettings {
   delayMinSeconds: number;
   delayMaxSeconds: number;
+  /** Texto usado no lugar de {nome} quando o contato não tem nome salvo */
+  nameFallback?: string;
 }
 
 export interface Campaign {
@@ -93,8 +106,12 @@ export interface Campaign {
   settings: CampaignSettings;
   status: CampaignStatus;
   createdAt: string;
+  /** Data/hora programada (ISO) quando a campanha foi agendada */
+  scheduledFor?: string;
   startedAt?: string;
   finishedAt?: string;
+  /** Observação, ex.: motivo de cancelamento automático */
+  note?: string;
   /** Resumo de origem dos destinatários (para exibição no histórico) */
   sources: { type: MemberType; id: string; name: string }[];
 }

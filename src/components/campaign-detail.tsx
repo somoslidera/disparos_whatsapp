@@ -17,8 +17,11 @@ export function CampaignDetail({ id }: { id: string }) {
   const reuse = () => {
     if (!campaign) return;
     try {
-      sessionStorage.setItem("disparos:draft", JSON.stringify({ message: { text: campaign.message.text, attachments: [] }, selection: campaign.sources }));
-      if (campaign.message.attachments.length) toast.info("Os anexos precisam ser adicionados novamente.");
+      sessionStorage.setItem(
+        "disparos:draft",
+        JSON.stringify({ message: { blocks: campaign.message.blocks.map((b) => ({ ...b, attachments: [] })) }, selection: campaign.sources, nameFallback: campaign.settings.nameFallback }),
+      );
+      if (campaign.message.blocks.some((b) => b.attachments.length)) toast.info("Os anexos precisam ser adicionados novamente.");
       router.push("/");
     } catch {
       toast.error("Não foi possível copiar a campanha.");
@@ -32,7 +35,11 @@ export function CampaignDetail({ id }: { id: string }) {
       </Link>
       <PageHeader
         title={campaign?.name || "Campanha"}
-        subtitle={campaign ? `Criada em ${formatDate(campaign.createdAt)}${campaign.finishedAt ? ` · finalizada em ${formatDate(campaign.finishedAt)}` : ""}` : undefined}
+        subtitle={
+          campaign
+            ? `Criada em ${formatDate(campaign.createdAt)}${campaign.scheduledFor ? ` · agendada para ${formatDate(campaign.scheduledFor)}` : ""}${campaign.finishedAt ? ` · finalizada em ${formatDate(campaign.finishedAt)}` : ""}`
+            : undefined
+        }
         actions={
           campaign && (
             <button type="button" onClick={reuse} className="btn-secondary">
@@ -51,7 +58,7 @@ export function CampaignDetail({ id }: { id: string }) {
           <div className="space-y-4">
             <div>
               <label className="label">Mensagem enviada</label>
-              <MessagePreview message={campaign.message} />
+              <MessagePreview message={campaign.message} sampleName={campaign.recipients.find((r) => r.type === "contact")?.name} nameFallback={campaign.settings.nameFallback} />
             </div>
             <div className="card p-4 text-xs text-slate-400">
               <p>

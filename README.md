@@ -6,6 +6,9 @@ Aplicativo para envio de mensagens em massa no WhatsApp, conectado ao seu númer
 - Em cada grupo, botão **Membros**: envie no grupo, no privado de membros escolhidos, ou nos dois
 - **Minhas listas**: crie listas com contatos, grupos e até outras listas. Ao selecionar a lista, todos recebem.
 - Mensagem com **texto, imagens, vídeos, áudios (mensagem de voz ou arquivo) e documentos**
+- **Blocos**: a mensagem pode ser dividida em várias mensagens enviadas em sequência
+- **Personalização**: `{nome}` vira o primeiro nome salvo na agenda (`{nome_completo}` também), com texto reserva configurável
+- **Agendamento** por data e hora (o disparo sai do navegador, com a aba aberta)
 - Pré-visualização em estilo WhatsApp, formatação (*negrito*, _itálico_, ~tachado~)
 - Envio de **mensagem de teste** para um número antes do disparo
 - Intervalo aleatório entre envios (reduz risco de bloqueio) e progresso em tempo real
@@ -69,6 +72,7 @@ Nunca versione o `.env`: ele já está no `.gitignore`.
 - Áudios são enviados como **mensagem de voz** (`ptt`) por padrão; é possível alternar para arquivo de áudio em cada anexo.
 - Arquivos são enviados ao uazapi em base64, então o app não precisa de URL pública. Limite de 3 MB por arquivo (limite de corpo de requisição da Vercel).
 - Se a aba for fechada durante um disparo, a campanha fica marcada como cancelada nos destinatários que não receberam.
+- Campanhas agendadas ficam guardadas no navegador (anexos em IndexedDB). Se a aba for fechada e reaberta antes da hora, o agendamento continua; se o horário passar há mais de 2 horas com a aba fechada, o agendamento é cancelado.
 
 ## Endpoints do uazapi utilizados
 

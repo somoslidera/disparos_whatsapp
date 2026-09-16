@@ -1,7 +1,7 @@
 "use client";
 
 import clsx from "clsx";
-import { CheckCircle2, Circle, Loader2, User, Users, XCircle } from "lucide-react";
+import { CalendarClock, CheckCircle2, Circle, Loader2, User, Users, XCircle } from "lucide-react";
 import { useCallback, useState, useSyncExternalStore } from "react";
 import { toast } from "sonner";
 import { formatDate } from "@/lib/client";
@@ -22,11 +22,11 @@ export function useCampaign(id: string | null) {
 }
 
 export function statusTone(status: Campaign["status"]) {
-  return ({ queued: "info", running: "brand", completed: "success", cancelled: "warning", failed: "danger" } as const)[status];
+  return ({ scheduled: "info", queued: "info", running: "brand", completed: "success", cancelled: "warning", failed: "danger" } as const)[status];
 }
 
 export function statusLabel(status: Campaign["status"]) {
-  return { queued: "Na fila", running: "Enviando", completed: "Concluída", cancelled: "Cancelada", failed: "Falhou" }[status];
+  return { scheduled: "Agendada", queued: "Na fila", running: "Enviando", completed: "Concluída", cancelled: "Cancelada", failed: "Falhou" }[status];
 }
 
 export function counts(recipients: CampaignRecipient[]) {
@@ -59,10 +59,12 @@ export function CampaignProgress({ campaign, running }: { campaign: Campaign; ru
   const [cancelling, setCancelling] = useState(false);
   const done = c.sent + c.failed + c.cancelled;
 
+  const scheduled = campaign.status === "scheduled";
   const cancel = () => {
     setCancelling(true);
-    if (cancelCampaign(campaign.id)) toast.success("Cancelamento solicitado. O envio atual será concluído.");
+    if (cancelCampaign(campaign.id)) toast.success(scheduled ? "Agendamento cancelado." : "Cancelamento solicitado. O envio atual será concluído.");
     else toast.error("Esta campanha não está em execução.");
+    setCancelling(false);
   };
 
   return (
@@ -75,14 +77,20 @@ export function CampaignProgress({ campaign, running }: { campaign: Campaign; ru
             {done}/{c.total} processados
           </span>
         </div>
-        {running && (
+        {(running || scheduled) && (
           <button type="button" onClick={cancel} disabled={cancelling} className="btn-danger h-8 px-3 text-xs">
-            <XCircle className="h-3.5 w-3.5" /> Cancelar envio
+            <XCircle className="h-3.5 w-3.5" /> {scheduled ? "Cancelar agendamento" : "Cancelar envio"}
           </button>
         )}
       </div>
 
+      {scheduled && campaign.scheduledFor && (
+        <p className="flex items-center gap-2 rounded-lg border border-sky-500/20 bg-sky-500/10 px-3 py-2 text-[12px] text-sky-100">
+          <CalendarClock className="h-4 w-4 shrink-0" /> Envio programado para {new Date(campaign.scheduledFor).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" })}. Mantenha esta aba aberta até lá.
+        </p>
+      )}
       {running && <p className="rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-100">Mantenha esta aba aberta até o fim do disparo.</p>}
+      {campaign.note && <p className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-[11px] text-slate-300">{campaign.note}</p>}
 
       <ProgressBar recipients={campaign.recipients} />
 
