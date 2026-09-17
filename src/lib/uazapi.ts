@@ -70,8 +70,16 @@ async function request<T = Json>(
       data = text;
     }
     if (!res.ok) {
-      const msg = extractError(data) || `uazapi respondeu ${res.status} em ${method} ${path}`;
-      throw new UazapiError(msg, res.status, data);
+      const detail = extractError(data);
+      let msg = detail || `uazapi respondeu ${res.status} em ${method} ${path}`;
+      if (res.status === 401 || res.status === 403) {
+        msg = `O uazapi recusou o token da instância (${res.status}${detail ? `: ${detail}` : ""}). Confira o Instance Token na tela Conexão.`;
+      } else if (res.status === 404 && /instance/i.test(path)) {
+        msg = `Instância não encontrada no servidor ${url}. Confira a URL e o token na tela Conexão.`;
+      }
+      // Erros de credencial do uazapi viram 502 aqui para não se confundirem com a senha do app.
+      const status = res.status === 401 || res.status === 403 ? 502 : res.status;
+      throw new UazapiError(msg, status, data);
     }
     return data as T;
   } catch (err) {

@@ -2,7 +2,7 @@
 
 import { Lock, Send } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "@/lib/client";
 import { Spinner } from "./ui";
 
@@ -12,6 +12,20 @@ export function LoginForm() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+
+  // Sem senha configurada, esta tela não deve aparecer: volta para o app.
+  useEffect(() => {
+    let active = true;
+    void fetch("/api/auth/check", { cache: "no-store" })
+      .then((r) => r.json().then((d: { enabled?: boolean }) => ({ ok: r.ok, d })))
+      .then(({ ok, d }) => {
+        if (active && ok && d.enabled === false) router.replace(params.get("next") || "/");
+      })
+      .catch(() => null);
+    return () => {
+      active = false;
+    };
+  }, [router, params]);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();

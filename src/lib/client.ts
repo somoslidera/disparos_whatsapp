@@ -28,8 +28,10 @@ export async function api<T = unknown>(url: string, init?: RequestInit): Promise
     data = { error: text };
   }
   if (!res.ok) {
-    const msg = (data as { error?: string })?.error || `Erro ${res.status}`;
-    if (res.status === 401 && typeof window !== "undefined" && !location.pathname.startsWith("/login")) {
+    const payload = (data || {}) as { error?: string; code?: string; source?: string };
+    const msg = payload.error || `Erro ${res.status}`;
+    // Só redireciona ao login quando o 401 é da proteção por senha do app (nunca por erro do uazapi).
+    if (res.status === 401 && payload.code === "auth_required" && typeof window !== "undefined" && !location.pathname.startsWith("/login")) {
       // Navegação completa proposital: a sessão expirou e o layout precisa ser recarregado.
       // eslint-disable-next-line @next/next/no-location-assign-relative-destination
       window.location.assign(`${window.location.origin}/login?next=${encodeURIComponent(window.location.pathname)}`);

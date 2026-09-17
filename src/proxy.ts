@@ -1,27 +1,19 @@
 import { NextResponse, type NextRequest } from "next/server";
-
-const COOKIE = "disparos_session";
+import { AUTH_COOKIE, isAuthEnabled, isValidSession } from "@/lib/auth";
 
 /**
- * Proteção opcional por senha (APP_PASSWORD). A validação do cookie acontece
- * no servidor (/api/auth/check) porque o runtime deste arquivo não tem acesso ao crypto do Node.
+ * Proteção opcional por senha (APP_PASSWORD). Sem a variável, tudo passa.
+ * O cookie é validado aqui mesmo (Web Crypto), sem chamadas internas.
  */
 export async function proxy(request: NextRequest) {
-  if (!process.env.APP_PASSWORD) return NextResponse.next();
+  if (!isAuthEnabled()) return NextResponse.next();
   const { pathname } = request.nextUrl;
   if (pathname.startsWith("/login") || pathname.startsWith("/api/auth")) return NextResponse.next();
 
-  const cookie = request.cookies.get(COOKIE)?.value;
-  if (cookie) {
-    const check = await fetch(new URL("/api/auth/check", request.url), {
-      headers: { cookie: `${COOKIE}=${cookie}` },
-      cache: "no-store",
-    }).catch(() => null);
-    if (check?.ok) return NextResponse.next();
-  }
+  if (await isValidSession(request.cookies.get(AUTH_COOKIE)?.value)) return NextResponse.next();
 
   if (pathname.startsWith("/api/")) {
-    return NextResponse.json({ error: "Não autenticado" }, { status: 401 });
+    return NextResponse.json({ error: "Não autenticado", code: "auth_required" }, { status: 401 });
   }
   const url = request.nextUrl.clone();
   url.pathname = "/login";
