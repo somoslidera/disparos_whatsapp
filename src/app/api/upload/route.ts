@@ -23,27 +23,36 @@ function blobToken(): string | undefined {
   return undefined;
 }
 
-function blobViaOidc(): boolean {
-  return Boolean(process.env.BLOB_STORE_ID && process.env.VERCEL_OIDC_TOKEN);
+/** Token de identidade do deploy: a Vercel o entrega no header x-vercel-oidc-token (ou em VERCEL_OIDC_TOKEN no dev local). */
+function oidcToken(req: Request): string | undefined {
+  return req.headers.get("x-vercel-oidc-token") || process.env.VERCEL_OIDC_TOKEN || undefined;
 }
 
-function blobEnabled() {
-  return Boolean(blobToken()) || blobViaOidc();
+function blobEnabled(req: Request) {
+  return Boolean(blobToken()) || Boolean(process.env.BLOB_STORE_ID && oidcToken(req));
 }
 
-/** Opções de autenticação para o SDK: token explícito (modelo antigo) ou nada (o SDK usa OIDC + BLOB_STORE_ID). */
-function authOptions(): { token?: string } {
+/** Opções de autenticação para o SDK: token explícito (modelo antigo) ou OIDC + BLOB_STORE_ID (modelo novo). */
+function authOptions(req: Request): { token?: string; oidcToken?: string; storeId?: string } {
   const token = blobToken();
-  return token ? { token } : {};
+  if (token) return { token };
+  return { oidcToken: oidcToken(req), storeId: process.env.BLOB_STORE_ID };
 }
 
 /** Capacidade de upload: informa ao navegador se o armazenamento de arquivos grandes está ligado. */
-export const GET = handle(async () => {
-  const enabled = blobEnabled();
+export const GET = handle(async (req: Request) => {
+  const enabled = blobEnabled(req);
   if (!enabled) {
     // Diagnóstico (apenas nomes de variáveis, nunca valores) para descobrir por que o Blob não foi detectado.
     const names = Object.keys(process.env).filter((n) => /BLOB|READ_WRITE|STORE|OIDC/i.test(n));
-    console.warn("[upload] Vercel Blob não detectado. Variáveis relacionadas presentes:", names.length ? names.join(", ") : "nenhuma", "| VERCEL_ENV:", process.env.VERCEL_ENV);
+    console.warn(
+      "[upload] Vercel Blob não detectado. Variáveis:",
+      names.length ? names.join(", ") : "nenhuma",
+      "| header x-vercel-oidc-token:",
+      req.headers.has("x-vercel-oidc-token") ? "presente" : "ausente",
+      "| VERCEL_ENV:",
+      process.env.VERCEL_ENV,
+    );
   }
   return ok({ blob: enabled, maxBytes: enabled ? BLOB_MAX_BYTES : INLINE_MAX_BYTES, inlineMaxBytes: INLINE_MAX_BYTES });
 });
@@ -53,10 +62,10 @@ export const GET = handle(async () => {
  * e recebe a confirmação de conclusão.
  */
 export const POST = handle(async (req: Request) => {
-  if (!blobEnabled()) return fail("Armazenamento de arquivos não configurado (BLOB_READ_WRITE_TOKEN).", 501);
+  if (!blobEnabled(req)) return fail("Armazenamento de arquivos não configurado (Vercel Blob).", 501);
   const body = (await req.json()) as HandleUploadBody;
   const result = await handleUpload({
-    ...authOptions(),
+    ...authOptions(req),
     body,
     request: req,
     onBeforeGenerateToken: async (pathname) => ({
@@ -74,9 +83,9 @@ export const POST = handle(async (req: Request) => {
 
 /** Remove um arquivo do Blob (depois do disparo ou ao tirar o anexo). */
 export const DELETE = handle(async (req: Request) => {
-  if (!blobEnabled()) return ok({ ok: true });
+  if (!blobEnabled(req)) return ok({ ok: true });
   const url = new URL(req.url).searchParams.get("url") || "";
   if (!/^https:\/\/[a-z0-9.-]*\.public\.blob\.vercel-storage\.com\//i.test(url)) return fail("URL inválida.");
-  await del(url, authOptions()).catch(() => null);
+  await del(url, authOptions(req)).catch(() => null);
   return ok({ ok: true });
 });
