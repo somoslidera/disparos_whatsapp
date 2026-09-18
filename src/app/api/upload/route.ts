@@ -10,13 +10,31 @@ export const BLOB_MAX_BYTES = 100 * 1024 * 1024;
 /** Limite do modo reserva (arquivo embutido em base64 no corpo da requisição; a Vercel corta em 4,5 MB). */
 export const INLINE_MAX_BYTES = 3 * 1024 * 1024;
 
+/**
+ * Token do Vercel Blob. Ao conectar um store, a Vercel cria BLOB_READ_WRITE_TOKEN,
+ * mas o prefixo pode ter sido personalizado (ex.: ANEXOS_READ_WRITE_TOKEN). Aceita qualquer um.
+ */
+function blobToken(): string | undefined {
+  if (process.env.BLOB_READ_WRITE_TOKEN) return process.env.BLOB_READ_WRITE_TOKEN;
+  for (const [name, value] of Object.entries(process.env)) {
+    if (name.endsWith("_READ_WRITE_TOKEN") && value && value.startsWith("vercel_blob_rw_")) return value;
+  }
+  return undefined;
+}
+
 function blobEnabled() {
-  return Boolean(process.env.BLOB_READ_WRITE_TOKEN);
+  return Boolean(blobToken());
 }
 
 /** Capacidade de upload: informa ao navegador se o armazenamento de arquivos grandes está ligado. */
 export const GET = handle(async () => {
-  return ok({ blob: blobEnabled(), maxBytes: blobEnabled() ? BLOB_MAX_BYTES : INLINE_MAX_BYTES, inlineMaxBytes: INLINE_MAX_BYTES });
+  const enabled = blobEnabled();
+  if (!enabled) {
+    // Diagnóstico (apenas nomes de variáveis, nunca valores) para descobrir por que o Blob não foi detectado.
+    const names = Object.keys(process.env).filter((n) => /BLOB|READ_WRITE|STORE/i.test(n));
+    console.warn("[upload] Vercel Blob não detectado. Variáveis relacionadas presentes:", names.length ? names.join(", ") : "nenhuma", "| VERCEL_ENV:", process.env.VERCEL_ENV);
+  }
+  return ok({ blob: enabled, maxBytes: enabled ? BLOB_MAX_BYTES : INLINE_MAX_BYTES, inlineMaxBytes: INLINE_MAX_BYTES });
 });
 
 /**
@@ -27,6 +45,7 @@ export const POST = handle(async (req: Request) => {
   if (!blobEnabled()) return fail("Armazenamento de arquivos não configurado (BLOB_READ_WRITE_TOKEN).", 501);
   const body = (await req.json()) as HandleUploadBody;
   const result = await handleUpload({
+    token: blobToken(),
     body,
     request: req,
     onBeforeGenerateToken: async (pathname) => ({
@@ -47,6 +66,6 @@ export const DELETE = handle(async (req: Request) => {
   if (!blobEnabled()) return ok({ ok: true });
   const url = new URL(req.url).searchParams.get("url") || "";
   if (!/^https:\/\/[a-z0-9.-]*\.public\.blob\.vercel-storage\.com\//i.test(url)) return fail("URL inválida.");
-  await del(url).catch(() => null);
+  await del(url, { token: blobToken() }).catch(() => null);
   return ok({ ok: true });
 });
