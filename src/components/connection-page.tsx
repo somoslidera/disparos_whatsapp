@@ -1,11 +1,12 @@
 "use client";
 
-import { CheckCircle2, Eye, EyeOff, KeyRound, LogOut, Pencil, QrCode, RefreshCw, Save, Smartphone, Wifi, WifiOff } from "lucide-react";
+import { CheckCircle2, Eye, EyeOff, HardDrive, KeyRound, LogOut, Pencil, QrCode, RefreshCw, Save, Smartphone, Wifi, WifiOff } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { api } from "@/lib/client";
 import { formatPhone } from "@/lib/phone";
 import { saveSettings } from "@/lib/settings";
+import { getUploadCapability, type UploadCapability } from "@/lib/uploads-client";
 import type { InstanceStatus } from "@/lib/types";
 import { useData } from "./data-provider";
 import { Avatar, Badge, Modal, PageHeader, Spinner } from "./ui";
@@ -95,6 +96,39 @@ function SettingsCard() {
           </p>
         </div>
       )}
+    </div>
+  );
+}
+
+/** Mostra se o armazenamento de arquivos grandes (Vercel Blob) está ligado. */
+function StorageCard() {
+  const [cap, setCap] = useState<UploadCapability | null>(null);
+  useEffect(() => {
+    let active = true;
+    void getUploadCapability().then((c) => active && setCap(c));
+    return () => {
+      active = false;
+    };
+  }, []);
+  const mb = cap ? Math.round(cap.maxBytes / 1024 / 1024) : null;
+  return (
+    <div className="card mt-6 flex items-center gap-4 p-5">
+      <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${cap?.blob ? "bg-brand-500/15 text-brand-300" : "bg-white/[0.05] text-slate-400"}`}>
+        <HardDrive className="h-5 w-5" />
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          <h2 className="font-semibold text-white">Anexos grandes</h2>
+          {cap && <Badge tone={cap.blob ? "success" : "warning"}>{cap.blob ? "ligado" : "desligado"}</Badge>}
+        </div>
+        <p className="text-xs text-slate-500">
+          {!cap
+            ? "Verificando…"
+            : cap.blob
+              ? `Vercel Blob conectado: arquivos até ${mb} MB sobem direto do navegador.`
+              : `Sem Vercel Blob: anexos limitados a ${mb} MB. Conecte um Blob ao projeto na Vercel e faça um redeploy para liberar arquivos grandes.`}
+        </p>
+      </div>
     </div>
   );
 }
@@ -260,6 +294,8 @@ export function ConnectionPage() {
           )}
         </div>
       </div>
+
+      <StorageCard />
 
       <Modal
         open={confirmLogout}
