@@ -4,6 +4,7 @@ import { nanoid } from "nanoid";
 import { api } from "./client";
 import { resolveRecipients, type SelectionItem } from "./audiences";
 import { idbDelete, idbGet, idbPut } from "./idb";
+import { discardAttachment } from "./uploads-client";
 import { personalize } from "./personalize";
 import { getAudiences, getCampaigns, upsertCampaign } from "./store";
 import type { Attachment, Campaign, CampaignSettings, MessageBlock, MessageDraft, StoredBlock } from "./types";
@@ -46,14 +47,23 @@ export function subscribeRunning(l: () => void) {
   };
 }
 
-type BlockPayload = { id: string; text: string; attachments: { name: string; mime: string; kind: Attachment["kind"]; asVoice?: boolean; dataUrl: string }[] };
+type BlockPayload = {
+  id: string;
+  text: string;
+  attachments: { name: string; mime: string; kind: Attachment["kind"]; asVoice?: boolean; url?: string; dataUrl?: string }[];
+};
 
 function toPayload(blocks: MessageBlock[]): BlockPayload[] {
   return blocks.map((b) => ({
     id: b.id,
     text: b.text,
-    attachments: b.attachments.map((a) => ({ name: a.name, mime: a.mime, kind: a.kind, asVoice: a.asVoice, dataUrl: a.dataUrl })),
+    attachments: b.attachments.map((a) => ({ name: a.name, mime: a.mime, kind: a.kind, asVoice: a.asVoice, url: a.url, dataUrl: a.dataUrl })),
   }));
+}
+
+/** Apaga do armazenamento os arquivos de uma campanha finalizada. */
+function discardBlobs(blocks: BlockPayload[]) {
+  for (const b of blocks) for (const a of b.attachments) if (a.url) void discardAttachment({ url: a.url });
 }
 
 function toStoredBlocks(blocks: MessageBlock[]): StoredBlock[] {
@@ -155,6 +165,7 @@ function runCampaign(campaign: Campaign, blocks: BlockPayload[]) {
     upsertCampaign(campaign);
     running.delete(campaign.id);
     void idbDelete(campaign.id).catch(() => null);
+    discardBlobs(blocks);
     notify();
   })();
 }
@@ -227,7 +238,10 @@ export function cancelCampaign(id: string) {
     c.note = "Agendamento cancelado.";
     c.finishedAt = new Date().toISOString();
     upsertCampaign(c);
-    void idbDelete(id).catch(() => null);
+    void idbGet<BlockPayload[]>(id)
+      .then((blocks) => blocks && discardBlobs(blocks))
+      .catch(() => null)
+      .finally(() => void idbDelete(id).catch(() => null));
     return true;
   }
   return false;
@@ -244,7 +258,10 @@ export function resumeScheduled() {
       c.note = `Horário perdido: a aba do app não estava aberta às ${new Date(at).toLocaleString("pt-BR")}.`;
       c.finishedAt = new Date().toISOString();
       upsertCampaign(c);
-      void idbDelete(c.id).catch(() => null);
+      void idbGet<BlockPayload[]>(c.id)
+        .then((blocks) => blocks && discardBlobs(blocks))
+        .catch(() => null)
+        .finally(() => void idbDelete(c.id).catch(() => null));
       continue;
     }
     armTimer(c.id, at);

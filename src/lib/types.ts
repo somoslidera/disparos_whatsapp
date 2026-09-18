@@ -53,8 +53,10 @@ export interface AttachmentMeta {
 }
 
 export interface Attachment extends AttachmentMeta {
-  /** data URI base64 */
-  dataUrl: string;
+  /** URL pública (Vercel Blob) quando o arquivo foi enviado ao armazenamento */
+  url?: string;
+  /** data URI base64 (modo reserva, arquivos pequenos) */
+  dataUrl?: string;
 }
 
 /** Um bloco = uma mensagem enviada em sequência (texto e/ou anexos). */

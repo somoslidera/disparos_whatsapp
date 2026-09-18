@@ -5,7 +5,7 @@ import { personalize } from "@/lib/personalize";
 import { renderWhatsAppText } from "@/lib/wa-format";
 import type { AttachmentMeta, MessageDraft, StoredMessage } from "@/lib/types";
 
-type PreviewBlock = { id: string; text: string; attachments: (AttachmentMeta & { dataUrl?: string })[] };
+type PreviewBlock = { id: string; text: string; attachments: (AttachmentMeta & { dataUrl?: string; url?: string })[] };
 
 /** Pré-visualização em estilo de balão do WhatsApp, um balão por bloco. */
 export function MessagePreview({
@@ -51,7 +51,7 @@ export function MessagePreview({
             return (
               <div key={block.id} className="flex w-full flex-col items-end gap-1.5">
                 {attachments.map((att, i) => {
-                  const url = att.dataUrl;
+                  const url = att.url || att.dataUrl;
                   const caption = i === captionIdx && text;
                   return (
                     <div key={att.id} className="w-full max-w-[300px] overflow-hidden rounded-xl rounded-tr-sm bg-[#005c4b] p-1 text-[13px] text-white shadow">

@@ -54,6 +54,7 @@ Todas opcionais. Sem elas, o app pede a URL e o token na tela Conexão.
 | `UAZAPI_URL`    | URL do servidor uazapi, ex.: `https://seu-servidor.uazapi.com`            |
 | `UAZAPI_TOKEN`  | Token da instância (Instance Token)                                       |
 | `APP_PASSWORD`  | Senha para acessar o app. Vazio desabilita a proteção.                    |
+| `BLOB_READ_WRITE_TOKEN` | Criado automaticamente ao conectar um Vercel Blob ao projeto. Habilita anexos grandes. |
 
 Nunca versione o `.env`: ele já está no `.gitignore`.
 
@@ -70,7 +71,7 @@ Nunca versione o `.env`: ele já está no `.gitignore`.
 - O navegador envia um destinatário por vez para `POST /api/send`, com intervalo aleatório entre o mínimo e o máximo configurados (padrão 4 a 10 s).
 - Texto com imagem, vídeo ou documento vai como legenda do primeiro anexo. Áudios não aceitam legenda, então o texto é enviado em uma mensagem separada.
 - Áudios são enviados como **mensagem de voz** (`ptt`) por padrão; é possível alternar para arquivo de áudio em cada anexo.
-- Arquivos são enviados ao uazapi em base64, então o app não precisa de URL pública. Limite de 3 MB por arquivo (limite de corpo de requisição da Vercel).
+- Anexos: com o **Vercel Blob** ligado no projeto (Storage → Blob → Connect), o navegador envia o arquivo direto ao armazenamento e o uazapi recebe a URL; limite de 100 MB por arquivo. Sem o Blob, o arquivo vai embutido em base64 com limite de 3 MB (limite de corpo de requisição da Vercel). Os arquivos são apagados do Blob ao terminar o disparo ou ao remover o anexo.
 - Se a aba for fechada durante um disparo, a campanha fica marcada como cancelada nos destinatários que não receberam.
 - Campanhas agendadas ficam guardadas no navegador (anexos em IndexedDB). Se a aba for fechada e reaberta antes da hora, o agendamento continua; se o horário passar há mais de 2 horas com a aba fechada, o agendamento é cancelado.
 

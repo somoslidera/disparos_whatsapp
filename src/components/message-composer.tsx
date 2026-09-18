@@ -5,25 +5,13 @@ import { AtSign, Bold, ChevronDown, ChevronUp, Code, FileText, Film, Image as Im
 import { nanoid } from "nanoid";
 import { useCallback, useEffect, useRef, useState, type DragEvent } from "react";
 import { toast } from "sonner";
-import { fileToDataUrl, formatBytes } from "@/lib/client";
+import { formatBytes } from "@/lib/client";
 import { NAME_TAG } from "@/lib/personalize";
-import type { Attachment, AttachmentKind, MessageBlock } from "@/lib/types";
+import type { Attachment, MessageBlock } from "@/lib/types";
+import { discardAttachment, getUploadCapability, prepareAttachment } from "@/lib/uploads-client";
 import { Spinner, Toggle } from "./ui";
 
 const ACCEPT = "image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.zip";
-/** Limite por arquivo. Na Vercel o corpo da requisição é limitado a 4,5 MB (o base64 cresce ~33%). */
-export const MAX_ATTACHMENT_BYTES = 3 * 1024 * 1024;
-
-function kindFromMime(mime: string, name: string): AttachmentKind {
-  if (mime.startsWith("image/")) return "image";
-  if (mime.startsWith("video/")) return "video";
-  if (mime.startsWith("audio/")) return "audio";
-  const ext = name.toLowerCase().split(".").pop() || "";
-  if (["jpg", "jpeg", "png", "gif", "webp"].includes(ext)) return "image";
-  if (["mp4", "mov", "webm", "3gp"].includes(ext)) return "video";
-  if (["mp3", "ogg", "opus", "m4a", "aac", "wav"].includes(ext)) return "audio";
-  return "document";
-}
 
 export function newBlock(): MessageBlock {
   return { id: nanoid(8), text: "", attachments: [] };
@@ -45,8 +33,17 @@ interface Props {
 export function MessageComposer({ value, onChange, disabled, index = 0, total = 1, onRemove, onMoveUp, onMoveDown, autoFocus }: Props) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
-  const [uploading, setUploading] = useState(0);
+  const [uploading, setUploading] = useState<{ name: string; pct: number }[]>([]);
   const [dragging, setDragging] = useState(false);
+  const [maxMb, setMaxMb] = useState<number | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    void getUploadCapability().then((cap) => active && setMaxMb(Math.round(cap.maxBytes / 1024 / 1024)));
+    return () => {
+      active = false;
+    };
+  }, []);
   // Seleção a aplicar depois que o React renderizar o novo texto (inserção pela barra de ferramentas)
   const pendingSelection = useRef<[number, number] | null>(null);
 
@@ -91,28 +88,15 @@ export function MessageComposer({ value, onChange, disabled, index = 0, total = 
         toast.error("Máximo de 10 anexos por bloco.");
         return;
       }
-      setUploading((n) => n + list.length);
       const added: Attachment[] = [];
       for (const file of list) {
+        setUploading((u) => [...u, { name: file.name, pct: 0 }]);
         try {
-          if (file.size > MAX_ATTACHMENT_BYTES) {
-            throw new Error(`arquivo acima de ${Math.round(MAX_ATTACHMENT_BYTES / 1024 / 1024)} MB. Reduza o tamanho ou use um link.`);
-          }
-          const mime = file.type || "application/octet-stream";
-          const kind = kindFromMime(mime, file.name);
-          added.push({
-            id: nanoid(10),
-            name: file.name,
-            mime,
-            size: file.size,
-            kind,
-            asVoice: kind === "audio" ? true : undefined,
-            dataUrl: await fileToDataUrl(file),
-          });
+          added.push(await prepareAttachment(file, (pct) => setUploading((u) => u.map((x) => (x.name === file.name ? { ...x, pct } : x)))));
         } catch (err) {
           toast.error(`Não foi possível anexar ${file.name}: ${(err as Error).message}`);
         } finally {
-          setUploading((n) => n - 1);
+          setUploading((u) => u.filter((x) => x.name !== file.name));
         }
       }
       if (added.length) onChange({ ...value, attachments: [...value.attachments, ...added] });
@@ -120,7 +104,10 @@ export function MessageComposer({ value, onChange, disabled, index = 0, total = 
     [onChange, value],
   );
 
-  const remove = (att: Attachment) => onChange({ ...value, attachments: value.attachments.filter((a) => a.id !== att.id) });
+  const remove = (att: Attachment) => {
+    onChange({ ...value, attachments: value.attachments.filter((a) => a.id !== att.id) });
+    void discardAttachment(att);
+  };
 
   const onDrop = (e: DragEvent) => {
     e.preventDefault();
@@ -181,8 +168,8 @@ export function MessageComposer({ value, onChange, disabled, index = 0, total = 
         <button type="button" disabled={disabled} onClick={insertName} className="btn-ghost h-8 gap-1.5 rounded-lg px-2 text-xs text-brand-300 hover:text-brand-200" title="Insere o primeiro nome do contato">
           <AtSign className="h-4 w-4" /> Nome
         </button>
-        <button type="button" disabled={disabled} onClick={() => fileRef.current?.click()} className="btn-ghost h-8 gap-1.5 rounded-lg px-2 text-xs">
-          <Paperclip className="h-4 w-4" /> Anexar
+        <button type="button" disabled={disabled} onClick={() => fileRef.current?.click()} className="btn-ghost h-8 gap-1.5 rounded-lg px-2 text-xs" title={maxMb ? `Até ${maxMb} MB por arquivo` : undefined}>
+          <Paperclip className="h-4 w-4" /> Anexar{maxMb ? <span className="text-[10px] text-slate-500">até {maxMb} MB</span> : null}
         </button>
         <input ref={fileRef} type="file" multiple accept={ACCEPT} className="hidden" onChange={(e) => e.target.files && (void upload(e.target.files), (e.target.value = ""))} />
         <span className="ml-auto text-[11px] text-slate-500 tabular-nums">{value.text.length.toLocaleString("pt-BR")} caracteres</span>
@@ -199,7 +186,7 @@ export function MessageComposer({ value, onChange, disabled, index = 0, total = 
         className={clsx("w-full resize-y bg-transparent px-4 py-3 text-sm leading-relaxed text-slate-100 outline-none placeholder:text-slate-600", multi ? "min-h-[100px]" : "min-h-[180px]")}
       />
 
-      {(value.attachments.length > 0 || uploading > 0) && (
+      {(value.attachments.length > 0 || uploading.length > 0) && (
         <div className="border-t border-white/8 p-3">
           <div className="grid gap-2 sm:grid-cols-2">
             {value.attachments.map((att) => (
@@ -211,11 +198,18 @@ export function MessageComposer({ value, onChange, disabled, index = 0, total = 
                 onToggleVoice={(v) => onChange({ ...value, attachments: value.attachments.map((a) => (a.id === att.id ? { ...a, asVoice: v } : a)) })}
               />
             ))}
-            {uploading > 0 && (
-              <div className="flex items-center gap-3 rounded-xl border border-dashed border-white/15 px-3 py-3 text-xs text-slate-400">
-                <Spinner /> Lendo {uploading} arquivo{uploading > 1 ? "s" : ""}…
+            {uploading.map((u) => (
+              <div key={u.name} className="flex items-center gap-3 rounded-xl border border-dashed border-white/15 px-3 py-3 text-xs text-slate-400">
+                <Spinner />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate">Enviando {u.name}…</span>
+                  <span className="mt-1.5 block h-1 w-full overflow-hidden rounded-full bg-white/10">
+                    <span className="block h-full bg-brand-500 transition-all" style={{ width: `${u.pct}%` }} />
+                  </span>
+                </span>
+                <span className="tabular-nums">{Math.round(u.pct)}%</span>
               </div>
-            )}
+            ))}
           </div>
         </div>
       )}
@@ -224,7 +218,7 @@ export function MessageComposer({ value, onChange, disabled, index = 0, total = 
 }
 
 function AttachmentCard({ att, onRemove, onToggleVoice, disabled }: { att: Attachment; onRemove: () => void; onToggleVoice: (v: boolean) => void; disabled?: boolean }) {
-  const url = att.dataUrl;
+  const url = att.url || att.dataUrl;
   const Icon = att.kind === "image" ? ImageIcon : att.kind === "video" ? Film : att.kind === "audio" ? Music : FileText;
   return (
     <div className="flex items-center gap-3 rounded-xl border border-white/10 bg-white/[0.03] p-2 pr-2.5">

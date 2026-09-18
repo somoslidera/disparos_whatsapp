@@ -32,7 +32,7 @@ export async function deliverMessage(creds: Creds, number: string, input: SendIn
     await sendMedia(creds, {
       number,
       type: mediaTypeFor(att),
-      file: att.dataUrl,
+      file: (att.url || att.dataUrl) as string,
       caption: useCaption ? text : undefined,
       fileName: att.kind === "document" ? att.name : undefined,
       mimetype: att.mime,
