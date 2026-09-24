@@ -274,6 +274,8 @@ function normalizeContact(c: Json): WaContact | null {
     str(
       pick(
         c,
+        "contact_name",
+        "contact_FirstName",
         "wa_contactName",
         "lead_fullName",
         "lead_name",
