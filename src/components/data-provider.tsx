@@ -87,7 +87,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
 
   const [contacts, loadContacts] = useResource<WaContact[]>(
     [],
-    useCallback(async () => (await api<{ contacts: WaContact[] }>("/api/whatsapp/contacts")).contacts, []),
+    useCallback(async (force: boolean) => (await api<{ contacts: WaContact[] }>(`/api/whatsapp/contacts${force ? "?force=1" : ""}`)).contacts, []),
   );
   const [groups, loadGroups] = useResource<WaGroup[]>(
     [],

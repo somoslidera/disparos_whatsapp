@@ -297,19 +297,29 @@ function normalizeContact(c: Json): WaContact | null {
 }
 
 /** Lista contatos combinando a agenda (/contacts) e as conversas (/chat/find). */
-export async function listContacts(creds: Creds): Promise<WaContact[]> {
+export async function listContacts(creds: Creds, force = false): Promise<WaContact[]> {
   const map = new Map<string, WaContact>();
   const errors: string[] = [];
+  const diag: string[] = [];
 
   // 1) Agenda de contatos
   try {
-    const data = await request<unknown>(creds, "GET", "/contacts", undefined, { timeoutMs: 120_000 });
-    for (const raw of asArray(data, "contacts", "data", "items")) {
+    const data = await request<unknown>(creds, "GET", `/contacts${force ? "?force=true" : ""}`, undefined, { timeoutMs: 120_000 });
+    const rows = asArray(data, "contacts", "data", "items");
+    let kept = 0;
+    for (const raw of rows) {
       const c = normalizeContact(raw);
-      if (c) map.set(c.id, c);
+      if (c) {
+        map.set(c.id, c);
+        kept++;
+      }
     }
+    const sample = rows[0] ? Object.keys(rows[0]).join(",") : "vazio";
+    diag.push(`agenda: ${rows.length} itens, ${kept} válidos, campos: ${sample}`);
+    if (rows.length === 0 && data && typeof data === "object" && !Array.isArray(data)) diag.push(`agenda: chaves da resposta: ${Object.keys(data as object).join(",")}`);
   } catch (err) {
     errors.push((err as Error).message);
+    diag.push(`agenda: erro ${(err as Error).message}`);
   }
 
   // 2) Conversas (inclui pessoas fora da agenda)
@@ -321,17 +331,25 @@ export async function listContacts(creds: Creds): Promise<WaContact[]> {
       { operator: "AND", sort: "-wa_lastMsgTimestamp", limit: 2000, offset: 0 },
       { timeoutMs: 120_000 },
     );
-    for (const raw of asArray(data, "chats", "data", "items")) {
+    const rows = asArray(data, "chats", "data", "items");
+    let named = 0;
+    for (const raw of rows) {
       if (raw.wa_isGroup === true) continue;
       const c = normalizeContact(raw);
       if (!c) continue;
+      if (c.name !== c.phone) named++;
       const existing = map.get(c.id);
       if (!existing) map.set(c.id, c);
       else if (existing.name === existing.phone && c.name !== c.phone) map.set(c.id, { ...existing, name: c.name });
     }
+    const sample = rows[0] ? Object.keys(rows[0]).join(",") : "vazio";
+    diag.push(`conversas: ${rows.length} itens, ${named} com nome, campos: ${sample}`);
   } catch (err) {
     errors.push((err as Error).message);
+    diag.push(`conversas: erro ${(err as Error).message}`);
   }
+
+  console.info("[contacts]", diag.join(" | "));
 
   if (map.size === 0 && errors.length === 2) {
     throw new UazapiError(`Não foi possível carregar os contatos: ${errors.join(" | ")}`, 502, null);
