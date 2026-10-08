@@ -1,12 +1,14 @@
 "use client";
 
-import { upload } from "@vercel/blob/client";
+import { upload, uploadPresigned } from "@vercel/blob/client";
 import { nanoid } from "nanoid";
 import { api, fileToDataUrl } from "./client";
 import type { Attachment, AttachmentKind } from "./types";
 
 export interface UploadCapability {
   blob: boolean;
+  /** "token": client token clássico; "presigned": URL pré-assinada (OIDC); "none": sem Blob */
+  mode?: "token" | "presigned" | "none";
   maxBytes: number;
   inlineMaxBytes: number;
 }
@@ -16,7 +18,7 @@ let capability: Promise<UploadCapability> | null = null;
 /** Descobre (uma vez) se o armazenamento de arquivos grandes está ligado. */
 export function getUploadCapability(): Promise<UploadCapability> {
   if (!capability) {
-    capability = api<UploadCapability>("/api/upload").catch(() => ({ blob: false, maxBytes: 3 * 1024 * 1024, inlineMaxBytes: 3 * 1024 * 1024 }));
+    capability = api<UploadCapability>("/api/upload").catch(() => ({ blob: false, mode: "none" as const, maxBytes: 3 * 1024 * 1024, inlineMaxBytes: 3 * 1024 * 1024 }));
   }
   return capability;
 }
@@ -56,14 +58,25 @@ export async function prepareAttachment(file: File, onProgress?: (pct: number) =
   }
 
   if (cap.blob) {
-    const blob = await upload(`anexos/${safeName(file.name)}`, file, {
-      access: "public",
+    const pathname = `anexos/${safeName(file.name)}`;
+    const options = {
+      access: "public" as const,
       handleUploadUrl: "/api/upload",
       contentType: mime,
       multipart: file.size > 8 * 1024 * 1024,
-      onUploadProgress: (p) => onProgress?.(p.percentage),
-    });
-    return { ...base, url: blob.url };
+      onUploadProgress: (p: { percentage: number }) => onProgress?.(p.percentage),
+    };
+    try {
+      const blob = cap.mode === "presigned" ? await uploadPresigned(pathname, file, options) : await upload(pathname, file, options);
+      return { ...base, url: blob.url };
+    } catch (err) {
+      // Arquivos pequenos ainda podem ir embutidos se o armazenamento falhar.
+      if (file.size <= cap.inlineMaxBytes) {
+        console.warn("Upload ao Blob falhou, usando modo embutido:", (err as Error).message);
+        return { ...base, dataUrl: await fileToDataUrl(file) };
+      }
+      throw new Error(`falha no envio ao armazenamento: ${(err as Error).message}`);
+    }
   }
 
   return { ...base, dataUrl: await fileToDataUrl(file) };
