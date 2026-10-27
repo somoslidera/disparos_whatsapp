@@ -1,12 +1,15 @@
 import { del, get, list, put } from "@vercel/blob";
+import { createHash } from "node:crypto";
 import { nanoid } from "nanoid";
 import { blobAuth, blobMode } from "./blob-auth";
 
 /**
- * Armazenamento dos envios do agente no Vercel Blob (arquivos privados):
- * - agente/ref/<referencia>.json  → trava de referência única (criado sem sobrescrita = atômico) e resultado final
- * - agente/log/<data>-<id>.json   → histórico de todas as chamadas (sucesso, falha, duplicado, teste)
- * - agente/rate/<ms>-<id>         → marcadores para o limite de chamadas por hora
+ * Armazenamento dos envios do agente no Vercel Blob. O store do projeto é público (os anexos precisam
+ * de link público para o uazapi), então os arquivos ficam sob um segmento secreto derivado da chave do
+ * agente, o que torna as URLs impossíveis de adivinhar:
+ * - agente/<segredo>/ref/<referencia>.json → trava de referência única (criado sem sobrescrita = atômico) e resultado final
+ * - agente/<segredo>/log/<data>-<id>.json  → histórico de todas as chamadas (sucesso, falha, duplicado, teste)
+ * - agente/<segredo>/rate/<ms>-<id>        → marcadores para o limite de chamadas por hora
  */
 
 export type AgentStatus = "enviando" | "concluido" | "parcial" | "falha" | "duplicado" | "teste" | "teste_falha";
@@ -36,9 +39,15 @@ export interface AgentRecord {
   anterior?: Pick<AgentRecord, "id" | "data" | "status" | "enviados" | "mensagens">;
 }
 
-const REF_PREFIX = "agente/ref/";
-const LOG_PREFIX = "agente/log/";
-const RATE_PREFIX = "agente/rate/";
+const ACCESS = "public" as const;
+
+function secretSegment(): string {
+  const key = process.env.DISPAROS_AGENT_KEY || "sem-chave";
+  return createHash("sha256").update(`disparos-agente:${key}`).digest("hex").slice(0, 24);
+}
+const REF_PREFIX = () => `agente/${secretSegment()}/ref/`;
+const LOG_PREFIX = () => `agente/${secretSegment()}/log/`;
+const RATE_PREFIX = () => `agente/${secretSegment()}/rate/`;
 const STALE_INFLIGHT_MS = 15 * 60 * 1000;
 
 /** Modo de teste local (sem Blob): guarda tudo em memória quando AGENT_STORE_MEMORY=1. */
@@ -54,7 +63,7 @@ async function readJson<T>(req: Request, pathname: string): Promise<T | null> {
     const hit = memory.get(pathname);
     return hit ? (JSON.parse(hit.value) as T) : null;
   }
-  const res = await get(pathname, { access: "private", useCache: false, ...blobAuth(req) }).catch(() => null);
+  const res = await get(pathname, { access: ACCESS, useCache: false, ...blobAuth(req) }).catch(() => null);
   if (!res || !("stream" in res) || !res.stream) return null;
   const text = await new Response(res.stream).text();
   try {
@@ -71,7 +80,7 @@ async function writeJson(req: Request, pathname: string, value: unknown, allowOv
     return;
   }
   await put(pathname, JSON.stringify(value), {
-    access: "private",
+    access: ACCESS,
     contentType: "application/json",
     addRandomSuffix: false,
     allowOverwrite,
@@ -88,7 +97,7 @@ export function storeAvailable(req: Request): boolean {
  * ou { claimed: false, existing } quando já há um envio concluído ou em andamento.
  */
 export async function claimReference(req: Request, referencia: string, draft: AgentRecord): Promise<{ claimed: true } | { claimed: false; existing: AgentRecord }> {
-  const pathname = `${REF_PREFIX}${safeRef(referencia)}.json`;
+  const pathname = `${REF_PREFIX()}${safeRef(referencia)}.json`;
   try {
     await writeJson(req, pathname, draft, false);
     return { claimed: true };
@@ -105,11 +114,11 @@ export async function claimReference(req: Request, referencia: string, draft: Ag
 }
 
 export async function finishReference(req: Request, referencia: string, record: AgentRecord) {
-  await writeJson(req, `${REF_PREFIX}${safeRef(referencia)}.json`, record, true);
+  await writeJson(req, `${REF_PREFIX()}${safeRef(referencia)}.json`, record, true);
 }
 
 export async function releaseReference(req: Request, referencia: string) {
-  const pathname = `${REF_PREFIX}${safeRef(referencia)}.json`;
+  const pathname = `${REF_PREFIX()}${safeRef(referencia)}.json`;
   if (memoryMode()) {
     memory.delete(pathname);
     return;
@@ -119,14 +128,14 @@ export async function releaseReference(req: Request, referencia: string) {
 
 export async function appendLog(req: Request, record: AgentRecord) {
   const stamp = record.data.replace(/[:.]/g, "-");
-  await writeJson(req, `${LOG_PREFIX}${stamp}-${record.id}.json`, record, true);
+  await writeJson(req, `${LOG_PREFIX()}${stamp}-${record.id}.json`, record, true);
 }
 
 /** Últimos registros do histórico do agente, mais recentes primeiro. */
 export async function listLog(req: Request, limit = 100): Promise<AgentRecord[]> {
   if (memoryMode()) {
     return [...memory.entries()]
-      .filter(([k]) => k.startsWith(LOG_PREFIX))
+      .filter(([k]) => k.startsWith(LOG_PREFIX()))
       .sort((a, b) => (a[0] < b[0] ? 1 : -1))
       .slice(0, limit)
       .map(([, v]) => JSON.parse(v.value) as AgentRecord);
@@ -135,7 +144,7 @@ export async function listLog(req: Request, limit = 100): Promise<AgentRecord[]>
   const blobs: { pathname: string; uploadedAt: Date }[] = [];
   let cursor: string | undefined;
   do {
-    const page = await list({ prefix: LOG_PREFIX, limit: 1000, cursor, ...auth });
+    const page = await list({ prefix: LOG_PREFIX(), limit: 1000, cursor, ...auth });
     blobs.push(...page.blobs);
     cursor = page.hasMore ? page.cursor : undefined;
   } while (cursor);
@@ -150,19 +159,19 @@ export async function listLog(req: Request, limit = 100): Promise<AgentRecord[]>
 export async function checkRateLimit(req: Request, max: number): Promise<{ allowed: boolean; count: number }> {
   if (memoryMode()) {
     const cutoff = Date.now() - 60 * 60 * 1000;
-    const recent = [...memory.entries()].filter(([k, v]) => k.startsWith(RATE_PREFIX) && v.uploadedAt.getTime() >= cutoff);
+    const recent = [...memory.entries()].filter(([k, v]) => k.startsWith(RATE_PREFIX()) && v.uploadedAt.getTime() >= cutoff);
     if (recent.length >= max) return { allowed: false, count: recent.length };
-    memory.set(`${RATE_PREFIX}${Date.now()}-${nanoid(6)}`, { value: "1", uploadedAt: new Date() });
+    memory.set(`${RATE_PREFIX()}${Date.now()}-${nanoid(6)}`, { value: "1", uploadedAt: new Date() });
     return { allowed: true, count: recent.length + 1 };
   }
   const auth = blobAuth(req);
-  const page = await list({ prefix: RATE_PREFIX, limit: 1000, ...auth });
+  const page = await list({ prefix: RATE_PREFIX(), limit: 1000, ...auth });
   const cutoff = Date.now() - 60 * 60 * 1000;
   const recent = page.blobs.filter((b) => new Date(b.uploadedAt).getTime() >= cutoff);
   const old = page.blobs.filter((b) => new Date(b.uploadedAt).getTime() < cutoff).map((b) => b.url);
   if (old.length) await del(old, auth).catch(() => null);
   if (recent.length >= max) return { allowed: false, count: recent.length };
-  await put(`${RATE_PREFIX}${Date.now()}-${nanoid(6)}`, "1", { access: "private", addRandomSuffix: false, allowOverwrite: true, ...auth }).catch(() => null);
+  await put(`${RATE_PREFIX()}${Date.now()}-${nanoid(6)}`, "1", { access: ACCESS, addRandomSuffix: false, allowOverwrite: true, ...auth }).catch(() => null);
   return { allowed: true, count: recent.length + 1 };
 }
 
