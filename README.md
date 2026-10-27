@@ -100,3 +100,24 @@ src/lib            cliente uazapi, entrega de mensagens, store local, motor de c
 ```
 
 Scripts: `npm run dev`, `npm run build`, `npm start`, `npm run lint`, `npm run typecheck`.
+
+## API para agentes (envio de atas sem interface)
+
+Rotas pensadas para um agente automático enviar mensagens em grupos de clientes pelo servidor, sem navegador.
+
+Autenticação: header `Authorization: Bearer <DISPAROS_AGENT_KEY>`. Variáveis necessárias na Vercel:
+
+| Variável | Descrição |
+| --- | --- |
+| `DISPAROS_AGENT_KEY` | Chave secreta do agente (mínimo 16 caracteres; use 32+ aleatórios) |
+| `DISPAROS_TESTE_NUMERO` | Número (DDI+DDD+número) que recebe os envios com `"teste": true` |
+| `UAZAPI_URL` / `UAZAPI_TOKEN` | Servidor e token da instância, para o servidor falar com o uazapi sem o navegador |
+
+Regras de segurança: só grupos cujo nome começa com `PLL |` ou `PLL Flow |`; um grupo por chamada; nunca contatos ou listas; no máximo 30 chamadas por hora.
+
+- `GET /api/agente/grupos`: grupos permitidos `[{ nome, id, participantes }]`.
+- `POST /api/agente/enviar`: corpo `{ grupo | grupoId, blocos: string[1..4] (até 1.000 caracteres cada), referencia, teste? }`.
+  Cada bloco vira uma mensagem, em sequência. `referencia` é única: uma referência já concluída (total ou parcialmente) responde 409 com o resultado anterior e não reenvia; uma referência cujo envio falhou por completo pode ser repetida. Nome não encontrado ou ambíguo: 422 com `parecidos`. Grupo fora do prefixo: 403. `teste: true` envia para `DISPAROS_TESTE_NUMERO` com a primeira linha `[TESTE] grupo: <nome>`.
+- `GET /api/agente/historico`: envios do agente (exibidos na tela Histórico como "Agente").
+
+Histórico e trava de referência ficam no Vercel Blob (arquivos privados em `agente/`).

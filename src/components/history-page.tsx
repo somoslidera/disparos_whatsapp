@@ -1,10 +1,11 @@
 "use client";
 
-import { CalendarClock, History, Layers, Paperclip, Trash2, User, Users } from "lucide-react";
+import { Bot, CalendarClock, History, Layers, Paperclip, Trash2, User, Users } from "lucide-react";
 import Link from "next/link";
-import { useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { toast } from "sonner";
-import { formatDate } from "@/lib/client";
+import { api, formatDate } from "@/lib/client";
+import type { AgentRecord } from "@/lib/agent-store";
 import { isRunning } from "@/lib/campaign-client";
 import { deleteCampaign, getCampaigns, getServerCampaigns, subscribe as subscribeStore } from "@/lib/store";
 import type { Campaign } from "@/lib/types";
@@ -14,6 +15,82 @@ import { Badge, EmptyState, Modal, PageHeader } from "./ui";
 type Summary = Campaign & { counts: ReturnType<typeof counts> };
 
 const attachmentCount = (c: Campaign) => c.message.blocks.reduce((n, b) => n + b.attachments.length, 0);
+
+const AGENT_STATUS: Record<AgentRecord["status"], { label: string; tone: "info" | "brand" | "success" | "warning" | "danger" | "neutral" }> = {
+  enviando: { label: "Enviando", tone: "brand" },
+  concluido: { label: "Concluído", tone: "success" },
+  parcial: { label: "Parcial", tone: "warning" },
+  falha: { label: "Falhou", tone: "danger" },
+  duplicado: { label: "Duplicado (não enviado)", tone: "warning" },
+  teste: { label: "Teste", tone: "info" },
+  teste_falha: { label: "Teste falhou", tone: "danger" },
+};
+
+/** Envios feitos pelo agente (gravados no servidor). */
+function AgentHistory() {
+  const [items, setItems] = useState<AgentRecord[] | null>(null);
+  const [open, setOpen] = useState<AgentRecord | null>(null);
+  useEffect(() => {
+    const t = setTimeout(() => {
+      void api<{ envios: AgentRecord[]; disponivel: boolean }>("/api/agente/historico")
+        .then((r) => setItems(r.disponivel ? r.envios : []))
+        .catch(() => setItems([]));
+    }, 0);
+    return () => clearTimeout(t);
+  }, []);
+  if (!items || items.length === 0) return null;
+  return (
+    <section className="mb-8">
+      <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-slate-200">
+        <Bot className="h-4 w-4 text-sky-300" /> Envios do agente
+        <span className="text-xs font-normal text-slate-500">gravados no servidor</span>
+      </h2>
+      <div className="space-y-2">
+        {items.map((r) => {
+          const st = AGENT_STATUS[r.status] || { label: r.status, tone: "neutral" as const };
+          return (
+            <button key={r.id} type="button" onClick={() => setOpen(r)} className="card flex w-full flex-col gap-1 p-4 text-left transition hover:border-white/15 sm:flex-row sm:items-center sm:gap-4">
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge tone="info">
+                    <Bot className="h-3 w-3" /> Agente
+                  </Badge>
+                  <h3 className="truncate font-medium text-white">{r.grupo}</h3>
+                  <Badge tone={st.tone}>{st.label}</Badge>
+                  {r.teste && <Badge>teste</Badge>}
+                </div>
+                <p className="mt-1 line-clamp-1 text-xs text-slate-400">{r.textos[0] || "(sem texto)"}</p>
+                <p className="mt-1 text-[11px] text-slate-500">
+                  {formatDate(r.data)} · ref. {r.referencia} · {r.enviados}/{r.blocos} bloco{r.blocos === 1 ? "" : "s"}
+                  {r.erro ? ` · ${r.erro}` : ""}
+                </p>
+              </div>
+            </button>
+          );
+        })}
+      </div>
+      <Modal open={Boolean(open)} onClose={() => setOpen(null)} title={open?.grupo || ""} description={open ? `${formatDate(open.data)} · referência ${open.referencia}` : undefined} size="lg">
+        {open && (
+          <div className="space-y-3">
+            {open.textos.map((t, i) => {
+              const m = open.mensagens[i];
+              return (
+                <div key={i} className="rounded-xl border border-white/8 bg-white/[0.03] p-3">
+                  <div className="mb-1 flex items-center gap-2 text-[11px] text-slate-500">
+                    Bloco {i + 1}
+                    {m && <Badge tone={m.status === "falha" || m.status === "nao_enviado" ? "danger" : "success"}>{m.status}</Badge>}
+                    {m?.erro && <span className="text-rose-300">{m.erro}</span>}
+                  </div>
+                  <p className="text-sm whitespace-pre-wrap text-slate-100">{t}</p>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </Modal>
+    </section>
+  );
+}
 
 export function HistoryPage() {
   const campaigns = useSyncExternalStore(subscribeStore, getCampaigns, getServerCampaigns);
@@ -33,6 +110,8 @@ export function HistoryPage() {
   return (
     <div className="animate-fade-up">
       <PageHeader title="Histórico" subtitle="Acompanhe os disparos realizados e o resultado por destinatário. Fica salvo neste navegador." />
+
+      <AgentHistory />
 
       {items.length === 0 ? (
         <div className="card">

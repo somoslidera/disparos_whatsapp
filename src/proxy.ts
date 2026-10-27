@@ -9,6 +9,8 @@ export async function proxy(request: NextRequest) {
   if (!isAuthEnabled()) return NextResponse.next();
   const { pathname } = request.nextUrl;
   if (pathname.startsWith("/login") || pathname.startsWith("/api/auth")) return NextResponse.next();
+  // Rotas do agente autenticam por chave própria (Authorization: Bearer), não pela senha do app.
+  if (pathname === "/api/agente/enviar" || pathname === "/api/agente/grupos") return NextResponse.next();
 
   if (await isValidSession(request.cookies.get(AUTH_COOKIE)?.value)) return NextResponse.next();
 
