@@ -6,7 +6,8 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { createCampaign, isBlankDraft, scheduleCampaign, sendOne, startCampaign } from "@/lib/campaign-client";
-import type { SelectionItem } from "@/lib/audiences";
+import { selectionUsesRules, type SelectionItem } from "@/lib/audiences";
+import { getDirectory } from "@/lib/directory";
 import { firstName, hasNameTag } from "@/lib/personalize";
 import { onlyDigits, toContactJid } from "@/lib/phone";
 import type { MessageDraft, StoredMessage } from "@/lib/types";
@@ -36,7 +37,7 @@ function toLocalInput(d: Date) {
 
 export function NewCampaign() {
   const router = useRouter();
-  const { status, audiences, contacts } = useData();
+  const { status, audiences, contacts, loadContacts, loadGroups } = useData();
   const params = useSearchParams();
   const [message, setMessage] = useState<MessageDraft>(emptyDraft);
   const [selection, setSelection] = useState<SelectionItem[]>([]);
@@ -113,6 +114,12 @@ export function NewCampaign() {
     setSending(true);
     try {
       if (delayMin > delayMax) throw new Error("O intervalo mínimo não pode ser maior que o máximo.");
+      // Listas automáticas: busca grupos e contatos atualizados antes de montar os destinatários
+      if (selectionUsesRules(selection, audiences)) {
+        await Promise.all([loadGroups(), loadContacts()]);
+        const dir = getDirectory();
+        if (!dir.groupsLoaded || !dir.contactsLoaded) throw new Error("Não foi possível carregar grupos e contatos para atualizar as listas automáticas. Tente novamente.");
+      }
       const c = createCampaign({
         name,
         message,

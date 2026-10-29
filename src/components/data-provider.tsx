@@ -3,11 +3,12 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { api } from "@/lib/client";
 import { getSettings, subscribeSettings } from "@/lib/settings";
-import { getAudiences, getServerAudiences, subscribe as subscribeStore } from "@/lib/store";
+import { getAudiences, getServerAudiences, subscribe as subscribeStore, syncAudiences } from "@/lib/store";
+import { setDirectoryContacts, setDirectoryGroups } from "@/lib/directory";
 import { countAudience } from "@/lib/audiences";
 import type { Audience, InstanceStatus, UazapiSettings, WaContact, WaGroup } from "@/lib/types";
 
-export type AudienceWithTotal = Audience & { total: number };
+export type AudienceWithTotal = Audience & { total: number; totalContacts: number; totalGroups: number };
 export type Status = (InstanceStatus & { configured: boolean; envConfigured?: boolean }) | null;
 
 interface Resource<T> {
@@ -58,7 +59,6 @@ const noopSettings = () => null;
 export function DataProvider({ children }: { children: ReactNode }) {
   const settings = useSyncExternalStore(subscribeSettings, getSettings, noopSettings);
   const rawAudiences = useSyncExternalStore(subscribeStore, getAudiences, getServerAudiences);
-  const audiences = useMemo(() => rawAudiences.map((a) => ({ ...a, total: countAudience(a, rawAudiences) })), [rawAudiences]);
 
   const [status, setStatus] = useState<Status>(null);
   const [statusError, setStatusError] = useState<string | null>(null);
@@ -87,12 +87,45 @@ export function DataProvider({ children }: { children: ReactNode }) {
 
   const [contacts, loadContacts] = useResource<WaContact[]>(
     [],
-    useCallback(async (force: boolean) => (await api<{ contacts: WaContact[] }>(`/api/whatsapp/contacts${force ? "?force=1" : ""}`)).contacts, []),
+    useCallback(async (force: boolean) => {
+      const list = (await api<{ contacts: WaContact[] }>(`/api/whatsapp/contacts${force ? "?force=1" : ""}`)).contacts;
+      setDirectoryContacts(list);
+      return list;
+    }, []),
   );
   const [groups, loadGroups] = useResource<WaGroup[]>(
     [],
-    useCallback(async (force: boolean) => (await api<{ groups: WaGroup[] }>(`/api/whatsapp/groups${force ? "?force=1" : ""}`)).groups, []),
+    useCallback(async (force: boolean) => {
+      const list = (await api<{ groups: WaGroup[] }>(`/api/whatsapp/groups${force ? "?force=1" : ""}`)).groups;
+      setDirectoryGroups(list);
+      return list;
+    }, []),
   );
+
+  // Totais das listas, incluindo os itens trazidos pelas regras automáticas
+  const audiences = useMemo<AudienceWithTotal[]>(() => {
+    const dir = { groups: groups.data, contacts: contacts.data };
+    return rawAudiences.map((a) => {
+      const c = countAudience(a, rawAudiences, dir);
+      return { ...a, total: c.total, totalContacts: c.contacts, totalGroups: c.groups };
+    });
+  }, [rawAudiences, groups.data, contacts.data]);
+
+  // Listas compartilhadas: sincroniza com o servidor ao abrir, ao trocar a instância e ao voltar para a aba
+  useEffect(() => {
+    if (typeof window !== "undefined" && location.pathname.startsWith("/login")) return;
+    if (!settings?.url && !status?.envConfigured) return;
+    const run = () => void syncAudiences();
+    const first = setTimeout(run, 0);
+    const onFocus = () => run();
+    window.addEventListener("focus", onFocus);
+    const t = setInterval(run, 60_000);
+    return () => {
+      clearTimeout(first);
+      clearInterval(t);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [settings?.url, settings?.token, status?.envConfigured]);
 
   const value = useMemo<DataContextValue>(
     () => ({ settings, status, statusError, refreshStatus, contacts, groups, audiences, loadContacts, loadGroups }),

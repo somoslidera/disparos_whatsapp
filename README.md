@@ -5,6 +5,9 @@ Aplicativo para envio de mensagens em massa no WhatsApp, conectado ao seu númer
 - Dispara para **contatos individuais** e **grupos do WhatsApp**
 - Em cada grupo, botão **Membros**: envie no grupo, no privado de membros escolhidos, ou nos dois
 - **Minhas listas**: crie listas com contatos, grupos e até outras listas. Ao selecionar a lista, todos recebem.
+  As listas ficam no servidor e são compartilhadas entre todos os computadores conectados à mesma instância do uazapi.
+- **Listas automáticas**: regras por nome (ex.: grupos que começam com `PLL |`, contatos que terminam com `PLL`).
+  Ao criar a regra, quem já existe e não está na lista fica "fora da lista"; só os novos entram sozinhos. Cada item pode ser incluído ou retirado manualmente.
 - Mensagem com **texto, imagens, vídeos, áudios (mensagem de voz ou arquivo) e documentos**
 - **Blocos**: a mensagem pode ser dividida em várias mensagens enviadas em sequência
 - **Personalização**: `{nome}` vira o primeiro nome salvo na agenda (`{nome_completo}` também), com texto reserva configurável

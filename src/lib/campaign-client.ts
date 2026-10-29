@@ -7,6 +7,7 @@ import { idbDelete, idbGet, idbPut } from "./idb";
 import { discardAttachment } from "./uploads-client";
 import { personalize } from "./personalize";
 import { getAudiences, getCampaigns, upsertCampaign } from "./store";
+import { getDirectory } from "./directory";
 import type { Attachment, Campaign, CampaignSettings, MessageBlock, MessageDraft, StoredBlock } from "./types";
 
 /**
@@ -103,7 +104,7 @@ export function createCampaign(input: {
   settings: CampaignSettings;
   scheduledFor?: Date | null;
 }): Campaign {
-  const recipients = resolveRecipients(input.selection, getAudiences()).map((r) => ({ ...r, status: "pending" as const }));
+  const recipients = resolveRecipients(input.selection, getAudiences(), getDirectory()).map((r) => ({ ...r, status: "pending" as const }));
   if (recipients.length === 0) throw new Error("A seleção não contém nenhum destinatário.");
   if (isBlankDraft(input.message)) throw new Error("Escreva uma mensagem ou anexe um arquivo.");
   // O campo de data tem precisão de minuto: aceita o minuto atual (dispara imediatamente) e rejeita o passado.

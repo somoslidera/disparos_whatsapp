@@ -6,11 +6,11 @@ import { resolveRecipients, type SelectionItem } from "@/lib/audiences";
 import { useData } from "./data-provider";
 
 export function useResolvedCount(selection: SelectionItem[]) {
-  const { audiences } = useData();
+  const { audiences, groups, contacts } = useData();
   return useMemo(() => {
-    const r = resolveRecipients(selection, audiences);
+    const r = resolveRecipients(selection, audiences, { groups: groups.data, contacts: contacts.data });
     return { total: r.length, contacts: r.filter((x) => x.type === "contact").length, groups: r.filter((x) => x.type === "group").length };
-  }, [selection, audiences]);
+  }, [selection, audiences, groups.data, contacts.data]);
 }
 
 export function SelectionSummary({ value, onChange }: { value: SelectionItem[]; onChange: (next: SelectionItem[]) => void }) {

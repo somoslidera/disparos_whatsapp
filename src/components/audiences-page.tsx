@@ -1,17 +1,18 @@
 "use client";
 
 import clsx from "clsx";
-import { Layers, Pencil, Plus, Send, Trash2, User, Users } from "lucide-react";
+import { Cloud, CloudOff, Layers, Pencil, Plus, Send, Trash2, User, Users, Wand2 } from "lucide-react";
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { toast } from "sonner";
-import { deleteAudience, getAudiences, saveAudience } from "@/lib/store";
-import { wouldCreateCycle, type SelectionItem } from "@/lib/audiences";
-import type { Audience } from "@/lib/types";
+import { deleteAudience, getAudiences, getServerSyncState, getSyncState, saveAudience, subscribe as subscribeStore } from "@/lib/store";
+import { hasRules, wouldCreateCycle, type SelectionItem } from "@/lib/audiences";
+import type { Audience, AudienceRule } from "@/lib/types";
+import { AutoRules, finalizeExcludes } from "./auto-rules";
 import { useData, type AudienceWithTotal } from "./data-provider";
 import { RecipientPicker } from "./recipient-picker";
 import { SelectionSummary } from "./selection-summary";
-import { EmptyState, Modal, PageHeader, Spinner } from "./ui";
+import { Badge, EmptyState, Modal, PageHeader, Spinner } from "./ui";
 
 const COLORS: Record<string, string> = {
   emerald: "from-emerald-400 to-teal-600",
@@ -23,28 +24,58 @@ const COLORS: Record<string, string> = {
 };
 
 export function AudiencesPage() {
-  const { audiences } = useData();
+  const { audiences, groups, contacts, loadGroups, loadContacts } = useData();
+  const sync = useSyncExternalStore(subscribeStore, getSyncState, getServerSyncState);
   const [editing, setEditing] = useState<Audience | null | "new">(null);
   const [deleting, setDeleting] = useState<AudienceWithTotal | null>(null);
 
-  const remove = () => {
+  // Listas automáticas precisam dos grupos e contatos para mostrar a contagem certa
+  const anyRules = audiences.some(hasRules);
+  useEffect(() => {
+    if (!anyRules) return;
+    const t = setTimeout(() => {
+      if (!groups.loaded && !groups.loading) void loadGroups();
+      if (!contacts.loaded && !contacts.loading) void loadContacts();
+    }, 0);
+    return () => clearTimeout(t);
+  }, [anyRules, groups.loaded, groups.loading, contacts.loaded, contacts.loading, loadGroups, loadContacts]);
+
+  const remove = async () => {
     if (!deleting) return;
-    deleteAudience(deleting.id);
-    toast.success("Lista excluída.");
+    const target = deleting;
     setDeleting(null);
+    const syncError = await deleteAudience(target.id);
+    if (syncError) toast.warning(syncError);
+    else toast.success("Lista excluída.");
   };
 
   return (
     <div className="animate-fade-up">
       <PageHeader
         title="Minhas listas"
-        subtitle="Agrupe contatos, grupos do WhatsApp e outras listas para disparar de uma vez."
+        subtitle="Agrupe contatos, grupos do WhatsApp e outras listas. As listas são compartilhadas entre os computadores conectados ao mesmo WhatsApp."
         actions={
           <button type="button" onClick={() => setEditing("new")} className="btn-primary">
             <Plus className="h-4 w-4" /> Nova lista
           </button>
         }
       />
+
+      <div className="mb-4 flex items-center gap-2 text-xs">
+        {sync.state === "synced" ? (
+          <span className="flex items-center gap-1.5 text-emerald-300">
+            <Cloud className="h-3.5 w-3.5" /> Sincronizado com o servidor
+          </span>
+        ) : sync.state === "error" ? (
+          <span className="flex items-center gap-1.5 text-amber-300" title={sync.error || undefined}>
+            <CloudOff className="h-3.5 w-3.5" /> Sem sincronizar: mostrando as listas deste navegador
+          </span>
+        ) : (
+          <span className="flex items-center gap-1.5 text-slate-500">
+            <Spinner className="h-3 w-3" /> Sincronizando…
+          </span>
+        )}
+      </div>
 
       {audiences.length === 0 ? (
         <div className="card">
@@ -62,9 +93,10 @@ export function AudiencesPage() {
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
           {audiences.map((a) => {
-            const c = a.members.filter((m) => m.type === "contact").length;
-            const g = a.members.filter((m) => m.type === "group").length;
+            const c = a.totalContacts;
+            const g = a.totalGroups;
             const l = a.members.filter((m) => m.type === "audience").length;
+            const auto = hasRules(a);
             return (
               <div key={a.id} className="card group flex flex-col p-5 transition hover:border-white/15">
                 <div className="flex items-start gap-3">
@@ -72,8 +104,15 @@ export function AudiencesPage() {
                     <Layers className="h-5 w-5" />
                   </span>
                   <div className="min-w-0 flex-1">
-                    <h3 className="truncate font-medium text-white">{a.name}</h3>
-                    <p className="line-clamp-2 text-xs text-slate-500">{a.description || "Sem descrição"}</p>
+                    <div className="flex items-center gap-2">
+                      <h3 className="truncate font-medium text-white">{a.name}</h3>
+                      {auto && (
+                        <Badge tone="brand">
+                          <Wand2 className="h-3 w-3" /> Automática
+                        </Badge>
+                      )}
+                    </div>
+                    <p className="line-clamp-2 text-xs text-slate-500">{a.description || (auto ? describeRules(a.rules || []) : "Sem descrição")}</p>
                   </div>
                 </div>
                 <div className="mt-4 flex items-center gap-3 text-xs text-slate-400">
@@ -143,15 +182,31 @@ function AudienceEditor({ audience, onClose, onSaved }: { audience: Audience | n
   const [description, setDescription] = useState(audience?.description || "");
   const [color, setColor] = useState(audience?.color || "emerald");
   const [members, setMembers] = useState<SelectionItem[]>(audience?.members || []);
+  const [rules, setRules] = useState<AudienceRule[]>(audience?.rules || []);
+  const [included, setIncluded] = useState<Set<string>>(new Set());
+  const [excluded, setExcluded] = useState<Set<string>>(new Set());
   const [saving, setSaving] = useState(false);
+  const { groups, contacts } = useData();
 
-  const save = () => {
+  const save = async () => {
     if (!name.trim()) {
       toast.error("Dê um nome à lista.");
       return;
     }
     setSaving(true);
     try {
+      const fin = finalizeExcludes({
+        rules,
+        originalRules: audience?.rules || [],
+        baseExclude: audience?.excludeIds || [],
+        included,
+        excluded,
+        members,
+        dir: { groups: groups.data, contacts: contacts.data },
+        groupsReady: groups.loaded && !groups.error,
+        contactsReady: contacts.loaded && !contacts.error,
+      });
+      if (fin.error) throw new Error(fin.error);
       if (audience) {
         for (const m of members) {
           if (m.type === "audience" && wouldCreateCycle(audience.id, m.id, getAudiences())) {
@@ -159,8 +214,10 @@ function AudienceEditor({ audience, onClose, onSaved }: { audience: Audience | n
           }
         }
       }
-      saveAudience({ id: audience?.id, name: name.trim(), description: description.trim(), color, members });
-      toast.success(audience ? "Lista atualizada." : "Lista criada.");
+      const cleanRules = rules.filter((r) => r.value.trim()).map((r) => ({ ...r, value: r.value.trim() }));
+      const { syncError } = await saveAudience({ id: audience?.id, name: name.trim(), description: description.trim(), color, members, rules: cleanRules, excludeIds: fin.excludeIds });
+      if (syncError) toast.warning(syncError);
+      else toast.success(audience ? "Lista atualizada." : "Lista criada.");
       onSaved();
     } catch (err) {
       toast.error((err as Error).message);
@@ -213,7 +270,29 @@ function AudienceEditor({ audience, onClose, onSaved }: { audience: Audience | n
           <SelectionSummary value={members} onChange={setMembers} />
         </div>
         <RecipientPicker value={members} onChange={setMembers} excludeAudienceIds={audience ? [audience.id] : []} />
+        <div className="lg:col-span-2">
+          <AutoRules
+            rules={rules}
+            onRulesChange={setRules}
+            originalRules={audience?.rules || []}
+            baseExclude={audience?.excludeIds || []}
+            members={members}
+            included={included}
+            excluded={excluded}
+            onIncludedChange={setIncluded}
+            onExcludedChange={setExcluded}
+          />
+        </div>
       </div>
     </Modal>
   );
+}
+
+const OP_LABEL: Record<AudienceRule["op"], string> = { startsWith: "começam com", endsWith: "terminam com", contains: "contêm" };
+
+function describeRules(rules: AudienceRule[]): string {
+  return rules
+    .filter((r) => r.value.trim())
+    .map((r) => `${r.target === "group" ? "Grupos" : "Contatos"} que ${OP_LABEL[r.op]} "${r.value.trim()}"`)
+    .join(" · ");
 }

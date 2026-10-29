@@ -1,14 +1,20 @@
 "use client";
 
 import { nanoid } from "nanoid";
+import { api } from "./client";
+import { getSettings } from "./settings";
 import type { Audience, Campaign, StoredMessage } from "./types";
 
 /**
- * Persistência no navegador (localStorage): listas e histórico de campanhas.
- * O servidor não guarda nada; tudo fica no dispositivo do usuário.
+ * Persistência:
+ * - Listas: no servidor (compartilhadas entre computadores da mesma instância do uazapi), com cópia
+ *   em localStorage para abrir rápido e funcionar se o servidor estiver indisponível.
+ * - Histórico de campanhas: apenas no navegador.
  */
 
 const KEY_AUDIENCES = "disparos:audiences";
+/** Marca, por instância, que as listas locais já foram enviadas ao servidor uma vez */
+const KEY_IMPORTED = "disparos:audiences:imported";
 const KEY_CAMPAIGNS = "disparos:campaigns";
 const MAX_CAMPAIGNS = 200;
 
@@ -91,7 +97,106 @@ export function getCampaigns(): Campaign[] {
   return campaigns;
 }
 
-export function saveAudience(input: Omit<Audience, "id" | "createdAt" | "updatedAt"> & { id?: string }): Audience {
+// ---------------------------------------------------------------------------
+// Listas compartilhadas (servidor)
+// ---------------------------------------------------------------------------
+
+export type SyncState = "local" | "syncing" | "synced" | "error";
+let syncState: SyncState = "local";
+let syncSnapshot: { state: SyncState; error: string | null } = { state: "local", error: null };
+let syncing: Promise<void> | null = null;
+const SERVER_SYNC = { state: "local" as SyncState, error: null as string | null };
+
+/** Estado da sincronização das listas (snapshot estável para useSyncExternalStore). */
+export function getSyncState() {
+  return syncSnapshot;
+}
+export const getServerSyncState = () => SERVER_SYNC;
+
+function setSync(state: SyncState, error: string | null = null) {
+  syncState = state;
+  if (syncSnapshot.state !== state || syncSnapshot.error !== error) syncSnapshot = { state, error };
+  emit();
+}
+
+/** Identificador simples da instância configurada (não é segredo; só separa as marcas de importação). */
+function instanceTag(): string {
+  const st = getSettings();
+  const raw = `${(st?.url || "env").trim().toLowerCase()}|${(st?.token || "").trim()}`;
+  let h = 5381;
+  for (let i = 0; i < raw.length; i++) h = ((h << 5) + h + raw.charCodeAt(i)) | 0;
+  return (h >>> 0).toString(36);
+}
+
+function importedFor(tag: string): boolean {
+  try {
+    return (localStorage.getItem(KEY_IMPORTED) || "").split(",").includes(tag);
+  } catch {
+    return false;
+  }
+}
+
+function markImported(tag: string) {
+  try {
+    const cur = (localStorage.getItem(KEY_IMPORTED) || "").split(",").filter(Boolean);
+    if (!cur.includes(tag)) localStorage.setItem(KEY_IMPORTED, [...cur, tag].join(","));
+  } catch {
+    /* ignore */
+  }
+}
+
+function applyServer(list: Audience[]) {
+  audiences = list;
+  persist(KEY_AUDIENCES, audiences);
+}
+
+/**
+ * Busca as listas no servidor. Na primeira vez em cada instância, envia as listas que só existem
+ * neste navegador; depois disso o servidor é a fonte de verdade (exclusões feitas em outro
+ * computador não voltam).
+ */
+export function syncAudiences(): Promise<void> {
+  if (typeof window === "undefined") return Promise.resolve();
+  if (syncing) return syncing;
+  syncing = (async () => {
+    setSync(syncState === "synced" ? "synced" : "syncing");
+    try {
+      const res = await api<{ audiences: Audience[] }>("/api/listas");
+      let server = res.audiences || [];
+      const tag = instanceTag();
+      if (!importedFor(tag)) {
+        const ids = new Set(server.map((a) => a.id));
+        const localOnly = getAudiences().filter((a) => !ids.has(a.id));
+        if (localOnly.length) {
+          server = (await api<{ audiences: Audience[] }>("/api/listas", { method: "POST", body: JSON.stringify({ op: "import", audiences: localOnly }) })).audiences;
+        }
+        markImported(tag);
+      }
+      applyServer(server);
+      setSync("synced");
+    } catch (err) {
+      setSync("error", (err as Error).message);
+    } finally {
+      syncing = null;
+    }
+  })();
+  return syncing;
+}
+
+/** Envia a alteração ao servidor. Retorna a mensagem de erro (a alteração continua salva neste navegador). */
+async function pushOp(body: unknown): Promise<string | null> {
+  try {
+    const res = await api<{ audiences: Audience[] }>("/api/listas", { method: "POST", body: JSON.stringify(body) });
+    applyServer(res.audiences);
+    setSync("synced");
+    return null;
+  } catch (err) {
+    setSync("error", (err as Error).message);
+    return `Salvo só neste navegador: não foi possível sincronizar com o servidor (${(err as Error).message}).`;
+  }
+}
+
+export async function saveAudience(input: Omit<Audience, "id" | "createdAt" | "updatedAt"> & { id?: string }): Promise<{ audience: Audience; syncError: string | null }> {
   const list = getAudiences();
   const now = new Date().toISOString();
   let saved: Audience;
@@ -106,15 +211,17 @@ export function saveAudience(input: Omit<Audience, "id" | "createdAt" | "updated
   }
   persist(KEY_AUDIENCES, audiences);
   emit();
-  return saved;
+  const syncError = await pushOp({ op: "upsert", audience: saved });
+  return { audience: saved, syncError };
 }
 
-export function deleteAudience(id: string) {
+export async function deleteAudience(id: string): Promise<string | null> {
   audiences = getAudiences()
     .filter((a) => a.id !== id)
     .map((a) => ({ ...a, members: a.members.filter((m) => !(m.type === "audience" && m.id === id)) }));
   persist(KEY_AUDIENCES, audiences);
   emit();
+  return pushOp({ op: "delete", id });
 }
 
 export function upsertCampaign(c: Campaign) {

@@ -29,12 +29,24 @@ export interface AudienceMember {
   name: string;
 }
 
+/** Regra automática: inclui na lista todo grupo/contato cujo nome bate com o critério. */
+export interface AudienceRule {
+  id: string;
+  target: "group" | "contact";
+  op: "startsWith" | "endsWith" | "contains";
+  value: string;
+}
+
 export interface Audience {
   id: string;
   name: string;
   description?: string;
   color: string;
   members: AudienceMember[];
+  /** Regras automáticas (OU entre si): a lista se atualiza conforme os nomes no WhatsApp */
+  rules?: AudienceRule[];
+  /** Ids que batem com as regras mas foram retirados manualmente */
+  excludeIds?: string[];
   createdAt: string;
   updatedAt: string;
 }
