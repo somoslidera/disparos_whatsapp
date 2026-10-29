@@ -15,6 +15,36 @@ import type { Audience, Campaign, StoredMessage } from "./types";
 const KEY_AUDIENCES = "disparos:audiences";
 /** Marca, por instância, que as listas locais já foram enviadas ao servidor uma vez */
 const KEY_IMPORTED = "disparos:audiences:imported";
+/** Alterações ainda não confirmadas pelo servidor (reenviadas na próxima sincronização) */
+const KEY_PENDING = "disparos:audiences:pending";
+
+type PendingOp = { op: "upsert" | "delete"; id: string };
+
+function loadPending(): PendingOp[] {
+  try {
+    const raw = localStorage.getItem(KEY_PENDING);
+    const parsed = raw ? (JSON.parse(raw) as PendingOp[]) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function savePending(list: PendingOp[]) {
+  try {
+    localStorage.setItem(KEY_PENDING, JSON.stringify(list));
+  } catch {
+    /* ignore */
+  }
+}
+
+function markPending(op: PendingOp) {
+  savePending([...loadPending().filter((p) => p.id !== op.id), op]);
+}
+
+function clearPending(id: string) {
+  savePending(loadPending().filter((p) => p.id !== id));
+}
 const KEY_CAMPAIGNS = "disparos:campaigns";
 const MAX_CAMPAIGNS = 200;
 
@@ -145,9 +175,36 @@ function markImported(tag: string) {
   }
 }
 
+/** Aplica a versão do servidor preservando alterações locais ainda pendentes. */
 function applyServer(list: Audience[]) {
-  audiences = list;
+  const pending = loadPending();
+  const local = new Map(getAudiences().map((a) => [a.id, a]));
+  const deleted = new Set(pending.filter((p) => p.op === "delete").map((p) => p.id));
+  const upserts = pending.filter((p) => p.op === "upsert" && local.has(p.id)).map((p) => local.get(p.id)!);
+  const upsertIds = new Set(upserts.map((a) => a.id));
+  const merged = list.filter((a) => !deleted.has(a.id) && !upsertIds.has(a.id));
+  audiences = [...upserts, ...merged];
   persist(KEY_AUDIENCES, audiences);
+}
+
+/** Reenvia alterações pendentes. Retorna quantas continuam pendentes. */
+async function flushPending(): Promise<number> {
+  const pending = loadPending();
+  if (!pending.length) return 0;
+  const local = new Map(getAudiences().map((a) => [a.id, a]));
+  for (const p of pending) {
+    try {
+      if (p.op === "delete") await api("/api/listas", { method: "POST", body: JSON.stringify({ op: "delete", id: p.id }) });
+      else {
+        const a = local.get(p.id);
+        if (a) await api("/api/listas", { method: "POST", body: JSON.stringify({ op: "upsert", audience: a }) });
+      }
+      clearPending(p.id);
+    } catch {
+      /* continua pendente */
+    }
+  }
+  return loadPending().length;
 }
 
 /**
@@ -161,6 +218,7 @@ export function syncAudiences(): Promise<void> {
   syncing = (async () => {
     setSync(syncState === "synced" ? "synced" : "syncing");
     try {
+      const stillPending = await flushPending();
       const res = await api<{ audiences: Audience[] }>("/api/listas");
       let server = res.audiences || [];
       const tag = instanceTag();
@@ -173,7 +231,8 @@ export function syncAudiences(): Promise<void> {
         markImported(tag);
       }
       applyServer(server);
-      setSync("synced");
+      if (stillPending) setSync("error", `${stillPending} alteração(ões) ainda não enviada(s) ao servidor.`);
+      else setSync("synced");
     } catch (err) {
       setSync("error", (err as Error).message);
     } finally {
@@ -183,16 +242,19 @@ export function syncAudiences(): Promise<void> {
   return syncing;
 }
 
-/** Envia a alteração ao servidor. Retorna a mensagem de erro (a alteração continua salva neste navegador). */
-async function pushOp(body: unknown): Promise<string | null> {
+/** Envia a alteração ao servidor. Retorna a mensagem de erro (a alteração continua salva neste navegador e é reenviada depois). */
+async function pushOp(body: { op: "upsert"; audience: Audience } | { op: "delete"; id: string }): Promise<string | null> {
+  const id = body.op === "upsert" ? body.audience.id : body.id;
+  markPending({ op: body.op, id });
   try {
     const res = await api<{ audiences: Audience[] }>("/api/listas", { method: "POST", body: JSON.stringify(body) });
+    clearPending(id);
     applyServer(res.audiences);
     setSync("synced");
     return null;
   } catch (err) {
     setSync("error", (err as Error).message);
-    return `Salvo só neste navegador: não foi possível sincronizar com o servidor (${(err as Error).message}).`;
+    return `Salvo neste navegador; o envio ao servidor falhou e será tentado de novo automaticamente (${(err as Error).message}).`;
   }
 }
 

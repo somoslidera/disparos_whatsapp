@@ -1,4 +1,4 @@
-import { get, put } from "@vercel/blob";
+import { del, get, list, put } from "@vercel/blob";
 import { blobAuth, blobMode } from "./blob-auth";
 
 /**
@@ -67,4 +67,51 @@ export async function updateJsonDoc<T>(req: Request, pathname: string, initial: 
     }
   }
   throw lastErr instanceof Error ? lastErr : new Error("Não foi possível salvar (conflito de edição).");
+}
+
+// ---------------------------------------------------------------------------
+// Documentos individuais (um arquivo por item), sem gravação condicional
+// ---------------------------------------------------------------------------
+
+/** Grava (ou substitui) um documento JSON. */
+export async function putJsonFile(req: Request, pathname: string, value: unknown): Promise<void> {
+  const body = JSON.stringify(value);
+  if (memoryMode()) {
+    memory.set(pathname, { value: body, etag: `m${Date.now()}` });
+    return;
+  }
+  await put(pathname, body, {
+    access: "public",
+    contentType: "application/json",
+    addRandomSuffix: false,
+    allowOverwrite: true,
+    cacheControlMaxAge: 60,
+    ...blobAuth(req),
+  });
+}
+
+export async function readJsonFile<T>(req: Request, pathname: string): Promise<T | null> {
+  const doc = await readJsonDoc<T>(req, pathname);
+  return doc ? doc.value : null;
+}
+
+/** Lista os caminhos sob um prefixo. */
+export async function listJsonFiles(req: Request, prefix: string): Promise<string[]> {
+  if (memoryMode()) return [...memory.keys()].filter((k) => k.startsWith(prefix));
+  const out: string[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await list({ prefix, limit: 1000, cursor, ...blobAuth(req) });
+    out.push(...page.blobs.map((b) => b.pathname));
+    cursor = page.hasMore ? page.cursor : undefined;
+  } while (cursor);
+  return out;
+}
+
+export async function deleteJsonFile(req: Request, pathname: string): Promise<void> {
+  if (memoryMode()) {
+    memory.delete(pathname);
+    return;
+  }
+  await del(pathname, blobAuth(req));
 }
