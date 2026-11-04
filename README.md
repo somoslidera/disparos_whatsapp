@@ -122,5 +122,6 @@ Regras de segurança: só grupos cujo nome começa com `PLL |` ou `PLL Flow |`; 
 - `POST /api/agente/enviar`: corpo `{ grupo | grupoId, blocos: string[1..4] (até 1.000 caracteres cada), referencia, teste? }`.
   Cada bloco vira uma mensagem, em sequência. `referencia` é única: uma referência já concluída (total ou parcialmente) responde 409 com o resultado anterior e não reenvia; uma referência cujo envio falhou por completo pode ser repetida. Nome não encontrado ou ambíguo: 422 com `parecidos`. Grupo fora do prefixo: 403. `teste: true` envia para `DISPAROS_TESTE_NUMERO` com a primeira linha `[TESTE] grupo: <nome>`.
 - `GET /api/agente/historico`: envios do agente (exibidos na tela Histórico como "Agente").
+- `GET /api/agente/conversas?grupo=<nome exato>` (ou `grupoId=`): **somente leitura** das mensagens de um grupo permitido (mesma trava de prefixo, 403/422 iguais ao envio). Parâmetros opcionais: `limite` (1–200, padrão 50: as N mensagens mais recentes), `offset` (para páginas anteriores, use `proximoOffset`) e `desde` (data/hora ISO). Resposta `{ ok, grupo, grupoId, total, temMais, proximoOffset, mensagens: [{ id, data (-03:00), deMim, autor (nome salvo na agenda, quando houver), autorNumero, tipo, texto, arquivo?, respondendo? }] }`, em ordem cronológica. O uazapi só guarda mensagens recebidas enquanto o número estava conectado nele.
 
-Histórico e trava de referência ficam no Vercel Blob (arquivos privados em `agente/`).
+Histórico e trava de referência ficam no Vercel Blob (em `agente/<segmento secreto>/`).

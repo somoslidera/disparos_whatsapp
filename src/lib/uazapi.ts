@@ -361,6 +361,96 @@ export async function listContacts(creds: Creds, force = false): Promise<WaConta
 }
 
 // ---------------------------------------------------------------------------
+// Leitura de mensagens
+// ---------------------------------------------------------------------------
+
+export type ChatMessageKind = "texto" | "imagem" | "video" | "audio" | "documento" | "figurinha" | "reacao" | "contato" | "localizacao" | "enquete" | "outro";
+
+export interface ChatMessage {
+  id: string;
+  /** Epoch em milissegundos */
+  timestamp: number;
+  fromMe: boolean;
+  senderJid: string;
+  senderPhone: string;
+  senderName: string;
+  kind: ChatMessageKind;
+  text: string;
+  fileName?: string;
+  quotedId?: string;
+}
+
+export interface ChatMessagesPage {
+  messages: ChatMessage[];
+  hasMore: boolean;
+  nextOffset: number | null;
+}
+
+function kindOf(rawType: string): ChatMessageKind {
+  const t = rawType.toLowerCase();
+  if (!t || t === "conversation" || t.startsWith("extendedtext") || t === "text") return "texto";
+  if (t.includes("reaction")) return "reacao";
+  if (t.includes("sticker")) return "figurinha";
+  if (t.includes("image")) return "imagem";
+  if (t.includes("video")) return "video";
+  if (t.includes("audio") || t === "ptt") return "audio";
+  if (t.includes("document")) return "documento";
+  if (t.includes("contact")) return "contato";
+  if (t.includes("location")) return "localizacao";
+  if (t.includes("poll")) return "enquete";
+  return "outro";
+}
+
+function toMillis(v: unknown): number {
+  const n = typeof v === "number" ? v : typeof v === "string" && /^\d+$/.test(v) ? Number(v) : typeof v === "string" ? Date.parse(v) : NaN;
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return n < 1e12 ? n * 1000 : n; // segundos → ms
+}
+
+function normalizeMessage(m: Json): ChatMessage | null {
+  const content = m.content && typeof m.content === "object" ? (m.content as Json) : {};
+  const rawType = str(pick(m, "messageType", "type", "mediaType"));
+  const kind = kindOf(rawType);
+  const text =
+    str(pick(m, "text", "body", "caption")) ||
+    (typeof m.content === "string" ? m.content : "") ||
+    str(pick(content, "text", "caption", "conversation", "name", "displayName"));
+  const id = str(pick(m, "messageid", "messageId", "id"));
+  // Mensagens de sistema (protocolo, chaves, edições internas) não interessam a quem lê a conversa.
+  if (kind === "outro" && !text) return null;
+  if (/protocol|senderkey|keydistribution/i.test(rawType)) return null;
+  const senderJid = str(pick(m, "sender_pn", "senderPn", "sender", "participant", "author"));
+  const quoted = pick(m, "quoted", "quotedId", "quotedMessageId");
+  return {
+    id,
+    timestamp: toMillis(pick(m, "messageTimestamp", "timestamp", "wa_timestamp", "created")),
+    fromMe: m.fromMe === true || m.fromMe === "true",
+    senderJid,
+    senderPhone: /@lid$/i.test(senderJid) ? "" : jidToPhone(senderJid),
+    senderName: str(pick(m, "senderName", "pushName", "notifyName")),
+    kind,
+    text,
+    fileName: str(pick(content, "fileName", "title")) || str(pick(m, "fileName", "docName")) || undefined,
+    quotedId: typeof quoted === "string" && quoted ? quoted : undefined,
+  };
+}
+
+/** Mensagens guardadas pelo uazapi para um chat (apenas o que chegou enquanto o número estava conectado). */
+export async function findMessages(creds: Creds, chatId: string, limit: number, offset = 0): Promise<ChatMessagesPage> {
+  const data = await request<unknown>(creds, "POST", "/message/find", { chatid: chatId, limit, offset }, { timeoutMs: 60_000 });
+  const rows = asArray(data, "messages", "data", "items");
+  const messages = rows.map(normalizeMessage).filter((x): x is ChatMessage => Boolean(x));
+  const d = data && typeof data === "object" && !Array.isArray(data) ? (data as Json) : {};
+  const sample = rows[0] ? Object.keys(rows[0]).join(",") : "vazio";
+  const types = [...new Set(rows.map((r) => str(pick(r, "messageType", "type"))))].slice(0, 12).join(",");
+  // Só nomes de campos e contagens: nenhum conteúdo de mensagem nem credencial vai para o log.
+  console.info("[mensagens]", `${rows.length} itens, ${messages.length} úteis, campos: ${sample}, tipos: ${types}`);
+  const hasMore = typeof d.hasMore === "boolean" ? d.hasMore : rows.length >= limit;
+  const next = typeof d.nextOffset === "number" ? d.nextOffset : hasMore ? offset + rows.length : null;
+  return { messages, hasMore, nextOffset: hasMore ? next : null };
+}
+
+// ---------------------------------------------------------------------------
 // Envio
 // ---------------------------------------------------------------------------
 
