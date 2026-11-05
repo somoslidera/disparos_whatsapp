@@ -12,7 +12,7 @@ import { blobAuth, blobMode } from "./blob-auth";
  * - agente/<segredo>/rate/<ms>-<id>        → marcadores para o limite de chamadas por hora
  */
 
-export type AgentStatus = "enviando" | "concluido" | "parcial" | "falha" | "duplicado" | "teste" | "teste_falha";
+export type AgentStatus = "enviando" | "concluido" | "parcial" | "falha" | "duplicado" | "teste" | "teste_falha" | "aviso" | "aviso_falha" | "aviso_duplicado";
 
 export interface AgentMessageResult {
   bloco: number;
@@ -47,7 +47,8 @@ function secretSegment(): string {
 }
 const REF_PREFIX = () => `agente/${secretSegment()}/ref/`;
 const LOG_PREFIX = () => `agente/${secretSegment()}/log/`;
-const RATE_PREFIX = () => `agente/${secretSegment()}/rate/`;
+/** Cada rota tem seu próprio limite: "envio" (atas) usa a pasta original rate/, as outras ganham pasta própria. */
+const RATE_PREFIX = (bucket = "envio") => `agente/${secretSegment()}/${bucket === "envio" ? "rate" : `rate-${bucket}`}/`;
 const STALE_INFLIGHT_MS = 15 * 60 * 1000;
 
 /** Modo de teste local (sem Blob): guarda tudo em memória quando AGENT_STORE_MEMORY=1. */
@@ -104,7 +105,7 @@ export async function claimReference(req: Request, referencia: string, draft: Ag
   } catch (err) {
     const existing = await readJson<AgentRecord>(req, pathname);
     if (!existing) throw err;
-    const concluded = existing.status === "concluido" || existing.status === "parcial";
+    const concluded = existing.status === "concluido" || existing.status === "parcial" || existing.status === "aviso";
     const inflightFresh = existing.status === "enviando" && Date.now() - new Date(existing.data).getTime() < STALE_INFLIGHT_MS;
     if (concluded || inflightFresh) return { claimed: false, existing };
     // Falha anterior ou envio abandonado: permite nova tentativa, sobrescrevendo a reserva.
@@ -156,22 +157,23 @@ export async function listLog(req: Request, limit = 100): Promise<AgentRecord[]>
 }
 
 /** Limite simples: no máximo `max` chamadas na última hora. Registra a chamada atual quando permitida. */
-export async function checkRateLimit(req: Request, max: number): Promise<{ allowed: boolean; count: number }> {
+export async function checkRateLimit(req: Request, max: number, bucket = "envio"): Promise<{ allowed: boolean; count: number }> {
+  const prefix = RATE_PREFIX(bucket);
   if (memoryMode()) {
     const cutoff = Date.now() - 60 * 60 * 1000;
-    const recent = [...memory.entries()].filter(([k, v]) => k.startsWith(RATE_PREFIX()) && v.uploadedAt.getTime() >= cutoff);
+    const recent = [...memory.entries()].filter(([k, v]) => k.startsWith(prefix) && v.uploadedAt.getTime() >= cutoff);
     if (recent.length >= max) return { allowed: false, count: recent.length };
-    memory.set(`${RATE_PREFIX()}${Date.now()}-${nanoid(6)}`, { value: "1", uploadedAt: new Date() });
+    memory.set(`${prefix}${Date.now()}-${nanoid(6)}`, { value: "1", uploadedAt: new Date() });
     return { allowed: true, count: recent.length + 1 };
   }
   const auth = blobAuth(req);
-  const page = await list({ prefix: RATE_PREFIX(), limit: 1000, ...auth });
+  const page = await list({ prefix: prefix, limit: 1000, ...auth });
   const cutoff = Date.now() - 60 * 60 * 1000;
   const recent = page.blobs.filter((b) => new Date(b.uploadedAt).getTime() >= cutoff);
   const old = page.blobs.filter((b) => new Date(b.uploadedAt).getTime() < cutoff).map((b) => b.url);
   if (old.length) await del(old, auth).catch(() => null);
   if (recent.length >= max) return { allowed: false, count: recent.length };
-  await put(`${RATE_PREFIX()}${Date.now()}-${nanoid(6)}`, "1", { access: ACCESS, addRandomSuffix: false, allowOverwrite: true, ...auth }).catch(() => null);
+  await put(`${prefix}${Date.now()}-${nanoid(6)}`, "1", { access: ACCESS, addRandomSuffix: false, allowOverwrite: true, ...auth }).catch(() => null);
   return { allowed: true, count: recent.length + 1 };
 }
 

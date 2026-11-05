@@ -24,6 +24,9 @@ const AGENT_STATUS: Record<AgentRecord["status"], { label: string; tone: "info" 
   duplicado: { label: "Duplicado (não enviado)", tone: "warning" },
   teste: { label: "Teste", tone: "info" },
   teste_falha: { label: "Teste falhou", tone: "danger" },
+  aviso: { label: "Aviso enviado para você", tone: "info" },
+  aviso_falha: { label: "Aviso falhou", tone: "danger" },
+  aviso_duplicado: { label: "Aviso repetido (não enviado)", tone: "warning" },
 };
 
 /** Envios feitos pelo agente (gravados no servidor). */

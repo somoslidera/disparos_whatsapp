@@ -114,6 +114,7 @@ Autenticação: header `Authorization: Bearer <DISPAROS_AGENT_KEY>`. Variáveis 
 | --- | --- |
 | `DISPAROS_AGENT_KEY` | Chave secreta do agente (mínimo 16 caracteres; use 32+ aleatórios) |
 | `DISPAROS_TESTE_NUMERO` | Número (DDI+DDD+número) que recebe os envios com `"teste": true` |
+| `DISPAROS_AVISO_NUMERO` | Opcional: número que recebe os avisos do agente (padrão: `DISPAROS_TESTE_NUMERO`) |
 | `UAZAPI_URL` / `UAZAPI_TOKEN` | Servidor e token da instância, para o servidor falar com o uazapi sem o navegador |
 
 Regras de segurança: só grupos cujo nome começa com `PLL |` ou `PLL Flow |`; um grupo por chamada; nunca contatos ou listas; no máximo 30 chamadas por hora.
@@ -123,5 +124,7 @@ Regras de segurança: só grupos cujo nome começa com `PLL |` ou `PLL Flow |`; 
   Cada bloco vira uma mensagem, em sequência. `referencia` é única: uma referência já concluída (total ou parcialmente) responde 409 com o resultado anterior e não reenvia; uma referência cujo envio falhou por completo pode ser repetida. Nome não encontrado ou ambíguo: 422 com `parecidos`. Grupo fora do prefixo: 403. `teste: true` envia para `DISPAROS_TESTE_NUMERO` com a primeira linha `[TESTE] grupo: <nome>`.
 - `GET /api/agente/historico`: envios do agente (exibidos na tela Histórico como "Agente").
 - `GET /api/agente/conversas?grupo=<nome exato>` (ou `grupoId=`): **somente leitura** das mensagens de um grupo permitido (mesma trava de prefixo, 403/422 iguais ao envio). Parâmetros opcionais: `limite` (1–200, padrão 50: as N mensagens mais recentes), `offset` (para páginas anteriores, use `proximoOffset`) e `desde` (data/hora ISO). Resposta `{ ok, grupo, grupoId, total, temMais, proximoOffset, mensagens: [{ id, data (-03:00), deMim, autor (nome salvo na agenda, quando houver), autorNumero, tipo, texto, arquivo?, respondendo? }] }`, em ordem cronológica. O uazapi só guarda mensagens recebidas enquanto o número estava conectado nele.
+
+- `POST /api/agente/aviso`: **aviso interno para você** quando o agente lê algo importante num grupo. Corpo `{ grupo | grupoId, texto (até 1.000 caracteres), referencia }`. O destino é fixo no servidor: `DISPAROS_AVISO_NUMERO` (opcional; sem ela usa `DISPAROS_TESTE_NUMERO`); o corpo não escolhe destino e nunca envia ao grupo ou a clientes. A mensagem chega como `🔔 Aviso do agente / Grupo: <nome>`. `referencia` repetida responde 409 sem reenviar (use, por exemplo, o id da mensagem do grupo). Limite próprio de 30 avisos por hora. Aparece no Histórico como "Aviso enviado para você".
 
 Histórico e trava de referência ficam no Vercel Blob (em `agente/<segmento secreto>/`).
