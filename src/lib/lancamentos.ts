@@ -10,6 +10,17 @@ import type { WaGroup } from "./types";
  */
 
 export const DEFAULT_DAYS = 7;
+
+/**
+ * Início dos lançamentos automáticos: nada enviado antes disso entra em /pendentes, mesmo com "desde" anterior.
+ * (Decisão de 05/11/2026: começar daqui para frente, sem tratar o que já estava nos grupos.)
+ * Pode ser alterado pela variável DISPAROS_LANC_INICIO (data/hora ISO).
+ */
+const LANC_INICIO_PADRAO = "2026-11-05T10:30:00-03:00";
+export function lancamentosStart(): number {
+  const fromEnv = Date.parse(process.env.DISPAROS_LANC_INICIO || "");
+  return Number.isFinite(fromEnv) ? fromEnv : Date.parse(LANC_INICIO_PADRAO);
+}
 export const DEFAULT_PER_GROUP = 100;
 export const MAX_PER_GROUP = 200;
 
