@@ -2,7 +2,7 @@ import { fail, getCreds, handle, ok } from "@/lib/api";
 import { agentKeyConfigured, isAgentAuthorized } from "@/lib/agent-auth";
 import { formatSaoPaulo, READ_RULE, resolveGroup } from "@/lib/agent";
 import { findMessages, listContacts } from "@/lib/uazapi";
-import { jidToPhone } from "@/lib/phone";
+import { messageView } from "@/lib/lancamentos";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -53,19 +53,8 @@ export const GET = handle(async (req: Request) => {
     .filter((m) => desde === null || m.timestamp >= desde)
     .sort((a, b) => a.timestamp - b.timestamp)
     .map((m) => {
-      const numero = m.senderPhone || (m.fromMe ? "" : jidToPhone(m.senderJid));
-      const nomeSalvo = numero ? saved.get(numero) : undefined;
-      return {
-        id: m.id,
-        data: m.timestamp ? formatSaoPaulo(new Date(m.timestamp)) : null,
-        deMim: m.fromMe,
-        autor: m.fromMe ? "Eu" : (nomeSalvo && nomeSalvo !== numero ? nomeSalvo : "") || m.senderName || numero || "Desconhecido",
-        autorNumero: m.fromMe ? null : numero || null,
-        tipo: m.kind,
-        texto: m.text,
-        ...(m.fileName ? { arquivo: m.fileName } : {}),
-        ...(m.quotedId ? { respondendo: m.quotedId } : {}),
-      };
+      const v = messageView(m, group.id, saved);
+      return { ...v, deMim: m.fromMe, ...(m.fromMe ? { autor: "Eu", autorNumero: null } : {}) };
     });
 
   return ok({

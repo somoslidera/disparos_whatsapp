@@ -10,6 +10,7 @@ import type { WaGroup } from "./types";
  */
 
 export const DEFAULT_DAYS = 7;
+const BLOCK_GAP_MS = 10 * 60 * 1000;
 
 /**
  * Início dos lançamentos automáticos: nada enviado antes disso entra em /pendentes, mesmo com "desde" anterior.
@@ -58,15 +59,20 @@ export function isTeamName(name: string) {
   return /\blidera\b/i.test(name) && !/\bPLL\b/.test(name);
 }
 
+export type { Names };
+
 /** Tudo que o cliente manda pode ser um lançamento: foto/PDF de nota ou texto com despesa (em qualquer formato). */
 export function isItemCandidate(m: ChatMessage): boolean {
   if (isNoteCandidate(m)) return true;
   return m.kind === "texto" && Boolean(m.text.trim());
 }
 
-function itemType(m: ChatMessage): "foto" | "pdf" | "documento" | "texto" {
+export type DisplayType = "foto" | "pdf" | "documento" | "texto" | "audio" | "video" | "figurinha" | "reacao" | "contato" | "localizacao" | "enquete" | "outro";
+
+/** Tipo exibido pelas rotas do agente (mesmo nome em /conversas e /lancamentos). */
+export function displayType(m: ChatMessage): DisplayType {
   if (m.kind === "imagem") return "foto";
-  if (m.kind === "texto") return "texto";
+  if (m.kind !== "documento") return m.kind;
   const mime = (m.mimetype || "").toLowerCase();
   const name = (m.fileName || "").toLowerCase();
   if (mime.startsWith("image/") || /\.(jpe?g|png|webp|heic)$/.test(name)) return "foto";
@@ -74,24 +80,51 @@ function itemType(m: ChatMessage): "foto" | "pdf" | "documento" | "texto" {
   return "documento";
 }
 
+const EXT: Record<string, string> = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/heic": "heic", "application/pdf": "pdf", "video/mp4": "mp4", "audio/ogg": "ogg", "audio/mpeg": "mp3" };
+
+export function hasFile(m: ChatMessage) {
+  return ["imagem", "documento", "video", "audio", "figurinha"].includes(m.kind);
+}
+
+/** Nome do arquivo: o original (PDFs) ou um nome gerado a partir do id e do tipo (fotos não têm nome). */
+export function fileNameOf(m: ChatMessage): string {
+  if (m.fileName) return m.fileName;
+  const mime = (m.mimetype || "").split(";")[0].trim().toLowerCase();
+  const ext = EXT[mime] || (m.kind === "imagem" ? "jpg" : "bin");
+  return `${m.kind === "imagem" ? "foto" : "arquivo"}-${m.id.replace(/[^A-Za-z0-9_-]+/g, "").slice(0, 40)}.${ext}`;
+}
+
+/** Caminho para baixar o arquivo da mensagem pela rota do agente. */
+export function downloadPath(grupoId: string, id: string) {
+  return `/api/agente/lancamentos/arquivo?grupoId=${encodeURIComponent(grupoId)}&id=${encodeURIComponent(id)}`;
+}
+
 type Names = Map<string, string>;
 
-function toItem(m: ChatMessage, names: Names) {
+export function authorOf(m: ChatMessage, names: Names) {
   const numero = m.senderPhone || jidToPhone(m.senderJid);
   const salvo = numero ? names.get(numero) : undefined;
-  const tipo = itemType(m);
+  return { autor: (salvo && salvo !== numero ? salvo : "") || m.senderName || numero || "Desconhecido", autorNumero: numero || null };
+}
+
+/** Campos comuns a /conversas e /lancamentos/pendentes. */
+export function messageView(m: ChatMessage, grupoId: string, names: Names) {
+  const file = hasFile(m);
   return {
     id: m.id,
     data: m.timestamp ? formatSaoPaulo(new Date(m.timestamp)) : null,
-    autor: (salvo && salvo !== numero ? salvo : "") || m.senderName || numero || "Desconhecido",
-    autorNumero: numero || null,
-    tipo,
+    ...authorOf(m, names),
+    tipo: displayType(m),
     /** Texto da mensagem, ou legenda da foto/PDF */
     texto: m.text || "",
-    ...(tipo !== "texto" ? { temArquivo: true } : {}),
-    ...(m.fileName ? { arquivo: m.fileName } : {}),
-    ...(m.mimetype ? { mimetype: m.mimetype } : {}),
+    temArquivo: file,
+    ...(file ? { arquivo: fileNameOf(m), mimetype: m.mimetype || null, download: downloadPath(grupoId, m.id) } : {}),
+    ...(m.quotedId ? { respondendo: m.quotedId } : {}),
   };
+}
+
+function toItem(m: ChatMessage, grupoId: string, names: Names) {
+  return { ...messageView(m, grupoId, names), bloco: 0 };
 }
 
 export type PendingItem = ReturnType<typeof toItem>;
@@ -115,11 +148,21 @@ export async function collectPending(
   return mapLimit(groups, 4, async (g): Promise<PendingGroup> => {
     try {
       const [page, marked] = await Promise.all([findMessages(creds, g.id, opts.perGroup, 0), listMarkedIds(req, g.id)]);
-      const itens = page.messages
+      const msgs = page.messages
         .filter((m) => !m.fromMe && m.id && m.timestamp >= opts.since && isItemCandidate(m) && !marked.has(noteKey(m.id)))
-        .map((m) => toItem(m, names))
-        .filter((it) => !isTeamName(it.autor))
-        .sort((a, b) => (a.data || "").localeCompare(b.data || ""));
+        .sort((a, b) => a.timestamp - b.timestamp);
+      const itens: PendingItem[] = [];
+      // "bloco": mensagens seguidas da mesma pessoa, com até 10 min entre uma e outra (ex.: foto da nota + texto explicando).
+      let bloco = 0;
+      let prev: { autor: string; ts: number } | null = null;
+      for (const m of msgs) {
+        const it = toItem(m, g.id, names);
+        if (isTeamName(it.autor)) continue;
+        if (!prev || prev.autor !== it.autor || m.timestamp - prev.ts > BLOCK_GAP_MS) bloco++;
+        it.bloco = bloco;
+        prev = { autor: it.autor, ts: m.timestamp };
+        itens.push(it);
+      }
       return { grupo: g.name, grupoId: g.id, itens };
     } catch (err) {
       return { grupo: g.name, grupoId: g.id, itens: [], erro: (err as Error).message };

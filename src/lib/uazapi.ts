@@ -450,7 +450,9 @@ function normalizeMessage(m: Json): ChatMessage | null {
   if (kind === "reacao" && !text) return null;
   if (/protocol|senderkey|keydistribution/i.test(rawType)) return null;
   const senderJid = str(pick(m, "sender_pn", "senderPn", "sender", "participant", "author"));
-  const quoted = pick(m, "quoted", "quotedId", "quotedMessageId");
+  const ctx = pickCI(content, "contextInfo");
+  const ctxQuoted = ctx && typeof ctx === "object" ? str(pickCI(ctx as Json, "stanzaId", "stanzaID")) : "";
+  const quoted = pick(m, "quoted", "quotedId", "quotedMessageId") || ctxQuoted || pickCI(content, "key");
   const isMedia = kind === "imagem" || kind === "documento" || kind === "video" || kind === "audio" || kind === "figurinha";
   return {
     id,
@@ -463,7 +465,7 @@ function normalizeMessage(m: Json): ChatMessage | null {
     text,
     fileName: (isMedia && (str(pickCI(content, "fileName", "file_name", "title", "docName")) || str(pick(m, "fileName", "docName")))) || undefined,
     mimetype: (isMedia && (str(pickCI(content, "mimetype", "mimeType", "mime_type")) || str(pick(m, "mimetype", "mimeType")))) || undefined,
-    quotedId: typeof quoted === "string" && quoted ? quoted : undefined,
+    quotedId: typeof quoted === "string" && quoted ? quoted : quoted && typeof quoted === "object" ? str(pickCI(quoted as Json, "id", "ID")) || undefined : undefined,
   };
 }
 
