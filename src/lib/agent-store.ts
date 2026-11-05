@@ -180,3 +180,48 @@ export async function checkRateLimit(req: Request, max: number, bucket = "envio"
 export function newRecordId() {
   return nanoid(10);
 }
+
+// ---------------------------------------------------------------------------
+// Lançamentos de notas fiscais: marca as mensagens (fotos/PDFs) já tratadas pelo agente
+// agente/<segredo>/lanc/<grupo>/<mensagem>.json
+// ---------------------------------------------------------------------------
+
+export type NoteMarkStatus = "lancada" | "ignorada";
+
+export interface NoteMark {
+  id: string;
+  grupoId: string;
+  grupo: string;
+  status: NoteMarkStatus;
+  observacao?: string;
+  data: string;
+}
+
+const LANC_PREFIX = (grupoId: string) => `agente/${secretSegment()}/lanc/${safeRef(grupoId)}/`;
+const markPath = (grupoId: string, id: string) => `${LANC_PREFIX(grupoId)}${safeRef(id) || "sem-id"}.json`;
+
+export async function markNotes(req: Request, marks: NoteMark[]) {
+  await Promise.all(marks.map((m) => writeJson(req, markPath(m.grupoId, m.id), m, true)));
+}
+
+/** Ids (normalizados) já marcados num grupo. Lista só os nomes dos arquivos, sem abrir cada um. */
+export async function listMarkedIds(req: Request, grupoId: string): Promise<Set<string>> {
+  const prefix = LANC_PREFIX(grupoId);
+  const names: string[] = [];
+  if (memoryMode()) {
+    for (const k of memory.keys()) if (k.startsWith(prefix)) names.push(k);
+  } else {
+    const auth = blobAuth(req);
+    let cursor: string | undefined;
+    do {
+      const page = await list({ prefix, limit: 1000, cursor, ...auth });
+      names.push(...page.blobs.map((b) => b.pathname));
+      cursor = page.hasMore ? page.cursor : undefined;
+    } while (cursor);
+  }
+  return new Set(names.map((n) => n.slice(prefix.length).replace(/\.json$/, "")));
+}
+
+export function noteKey(id: string) {
+  return safeRef(id) || "sem-id";
+}

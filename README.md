@@ -127,4 +127,15 @@ Regras de segurança: só grupos cujo nome começa com `PLL |` ou `PLL Flow |`; 
 
 - `POST /api/agente/aviso`: **aviso interno para você** quando o agente lê algo importante num grupo. Corpo `{ grupo | grupoId, texto (até 1.000 caracteres), referencia }`. O destino é fixo no servidor: `DISPAROS_AVISO_NUMERO` (opcional; sem ela usa `DISPAROS_TESTE_NUMERO`); o corpo não escolhe destino e nunca envia ao grupo ou a clientes. A mensagem chega como `🔔 Aviso do agente / Grupo: <nome>`. `referencia` repetida responde 409 sem reenviar (use, por exemplo, o id da mensagem do grupo). Limite próprio de 30 avisos por hora. Aparece no Histórico como "Aviso enviado para você".
 
+### Lançamentos de notas fiscais (grupos "Lançamentos - <cliente>")
+
+Para um agente buscar o que os clientes mandam nesses grupos e fazer os lançamentos. Mesma chave do agente.
+
+- `GET /api/agente/lancamentos/pendentes`: tudo que os clientes mandaram e ainda não foi tratado, por grupo: fotos e PDFs de notas e textos com despesas (em qualquer formato, ex.: "01 cx de ovos - 145,00"). Ficam de fora mensagens deste número e de contatos da equipe (salvos com "Lidera" no nome). Opcionais: `grupo`/`grupoId` (um grupo só), `desde` (ISO; padrão 7 dias), `limitePorGrupo` (1–200, padrão 100). Resposta `{ grupos: [{ grupo, grupoId, itens: [{ id, data, autor, autorNumero, tipo: foto|pdf|documento|texto, texto, temArquivo?, arquivo?, mimetype? }] }], totalItens }`.
+- `GET /api/agente/lancamentos/arquivo?grupoId=<jid>&id=<id>`: baixa a foto/PDF do item (só de mensagens entre as 200 mais recentes de um grupo de Lançamentos).
+- `POST /api/agente/lancamentos/marcar`: `{ grupo | grupoId, ids: [...], status: "lancada" | "ignorada", observacao? }`. Tira os itens de `/pendentes` sem enviar nada.
+- `POST /api/agente/lancamentos/confirmar`: `{ grupo | grupoId, ids: [...], observacao? (até 300) }`. Envia **uma** mensagem no grupo para o lote ("✅ Recebemos e já lançamos N itens. Obrigado!" + observação) e marca os itens como lançados. O mesmo lote nunca é confirmado duas vezes (409). Só grupos "Lançamentos -"; limite de 30 por hora.
+
+`/api/agente/conversas` também lê grupos "Lançamentos -". Atas (`/enviar`) continuam só para grupos PLL.
+
 Histórico e trava de referência ficam no Vercel Blob (em `agente/<segmento secreto>/`).

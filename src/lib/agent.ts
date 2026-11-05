@@ -31,6 +31,25 @@ export function isAllowedGroup(name: string): boolean {
   return ALLOWED_GROUP_RE.test(name.trim());
 }
 
+/** Grupos de lançamento de notas fiscais: "Lançamentos - <cliente>". */
+export const LANC_GROUP_RE = /^lan[çc]amentos\s*-\s*\S/i;
+export function isLancamentosGroup(name: string): boolean {
+  return LANC_GROUP_RE.test(name.normalize("NFC").trim());
+}
+
+export interface GroupRule {
+  allowed: (name: string) => boolean;
+  /** Complemento da mensagem de recusa, ex.: 'não começa com "PLL |" ou "PLL Flow |"' */
+  refusal: string;
+}
+export const PLL_RULE: GroupRule = { allowed: isAllowedGroup, refusal: 'não começa com "PLL |" ou "PLL Flow |"' };
+export const LANC_RULE: GroupRule = { allowed: isLancamentosGroup, refusal: 'não começa com "Lançamentos -"' };
+/** Leitura: grupos PLL ou de Lançamentos. */
+export const READ_RULE: GroupRule = {
+  allowed: (n) => isAllowedGroup(n) || isLancamentosGroup(n),
+  refusal: 'não começa com "PLL |", "PLL Flow |" ou "Lançamentos -"',
+};
+
 function norm(s: string): string {
   return s
     .normalize("NFD")
@@ -46,13 +65,13 @@ export type GroupResolution =
   | { ok: false; status: 403; message: string };
 
 /** Resolve o grupo pelo nome exato (ou id) e aplica a trava de prefixo. */
-export async function resolveGroup(creds: Creds, input: { grupo?: string; grupoId?: string }): Promise<GroupResolution> {
+export async function resolveGroup(creds: Creds, input: { grupo?: string; grupoId?: string }, rule: GroupRule = PLL_RULE): Promise<GroupResolution> {
   const groups = await listGroups(creds, false);
 
   if (input.grupoId) {
     const g = groups.find((x) => x.id === input.grupoId!.trim());
     if (!g) return { ok: false, status: 422, message: "grupoId não encontrado entre os grupos da conta.", parecidos: [] };
-    if (!isAllowedGroup(g.name)) return { ok: false, status: 403, message: `O grupo "${g.name}" não começa com "PLL |" ou "PLL Flow |".` };
+    if (!rule.allowed(g.name)) return { ok: false, status: 403, message: `O grupo "${g.name}" ${rule.refusal}.` };
     return { ok: true, group: g };
   }
 
@@ -62,7 +81,7 @@ export async function resolveGroup(creds: Creds, input: { grupo?: string; grupoI
 
   if (matches.length === 1) {
     const g = matches[0];
-    if (!isAllowedGroup(g.name)) return { ok: false, status: 403, message: `O grupo "${g.name}" não começa com "PLL |" ou "PLL Flow |".` };
+    if (!rule.allowed(g.name)) return { ok: false, status: 403, message: `O grupo "${g.name}" ${rule.refusal}.` };
     return { ok: true, group: g };
   }
 
@@ -73,9 +92,9 @@ export async function resolveGroup(creds: Creds, input: { grupo?: string; grupoI
   // Sugestões: grupos permitidos cujo nome contém alguma palavra relevante do nome pedido
   const words = norm(wanted)
     .split(/[^a-z0-9]+/)
-    .filter((w) => w.length >= 3 && !["pll", "flow"].includes(w));
+    .filter((w) => w.length >= 3 && !["pll", "flow", "lancamentos"].includes(w));
   const parecidos = groups
-    .filter((g) => isAllowedGroup(g.name))
+    .filter((g) => rule.allowed(g.name))
     .filter((g) => words.some((w) => norm(g.name).includes(w)))
     .slice(0, 10)
     .map((g) => ({ nome: g.name, id: g.id }));

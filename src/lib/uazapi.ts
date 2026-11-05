@@ -377,6 +377,7 @@ export interface ChatMessage {
   kind: ChatMessageKind;
   text: string;
   fileName?: string;
+  mimetype?: string;
   quotedId?: string;
 }
 
@@ -431,6 +432,7 @@ function normalizeMessage(m: Json): ChatMessage | null {
     kind,
     text,
     fileName: str(pick(content, "fileName", "title")) || str(pick(m, "fileName", "docName")) || undefined,
+    mimetype: str(pick(content, "mimetype", "mimeType")) || str(pick(m, "mimetype", "mimeType")) || undefined,
     quotedId: typeof quoted === "string" && quoted ? quoted : undefined,
   };
 }
@@ -448,6 +450,40 @@ export async function findMessages(creds: Creds, chatId: string, limit: number, 
   const hasMore = typeof d.hasMore === "boolean" ? d.hasMore : rows.length >= limit;
   const next = typeof d.nextOffset === "number" ? d.nextOffset : hasMore ? offset + rows.length : null;
   return { messages, hasMore, nextOffset: hasMore ? next : null };
+}
+
+export interface DownloadedMedia {
+  bytes: Uint8Array;
+  mimetype: string;
+}
+
+/** Baixa a mídia (foto, PDF...) de uma mensagem guardada no uazapi. */
+export async function downloadMessageMedia(creds: Creds, messageId: string): Promise<DownloadedMedia> {
+  const data = await request<unknown>(
+    creds,
+    "POST",
+    "/message/download",
+    { id: messageId, return_base64: true, return_link: true, generate_mp3: false },
+    { timeoutMs: 90_000 },
+  );
+  const d = data && typeof data === "object" && !Array.isArray(data) ? (data as Json) : {};
+  // Só nomes de campos: nenhum conteúdo nem credencial vai para o log.
+  console.info("[midia]", `campos: ${Object.keys(d).join(",") || typeof data}`);
+  let mimetype = str(pick(d, "mimetype", "mimeType", "contentType"));
+  let b64 = str(pick(d, "base64Data", "base64", "data", "file"));
+  const dataUri = /^data:([^;]+);base64,(.*)$/s.exec(b64);
+  if (dataUri) {
+    mimetype ||= dataUri[1];
+    b64 = dataUri[2];
+  }
+  if (b64 && !/^https?:\/\//i.test(b64)) {
+    return { bytes: Uint8Array.from(Buffer.from(b64, "base64")), mimetype: mimetype || "application/octet-stream" };
+  }
+  const link = str(pick(d, "fileURL", "fileUrl", "url", "link")) || (/^https?:\/\//i.test(b64) ? b64 : "");
+  if (!link) throw new UazapiError("O uazapi não devolveu o arquivo dessa mensagem.", 502, null);
+  const res = await fetch(link, { cache: "no-store" });
+  if (!res.ok) throw new UazapiError(`Não foi possível baixar o arquivo (${res.status}).`, 502, null);
+  return { bytes: new Uint8Array(await res.arrayBuffer()), mimetype: mimetype || res.headers.get("content-type") || "application/octet-stream" };
 }
 
 // ---------------------------------------------------------------------------

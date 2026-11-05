@@ -1,6 +1,6 @@
 import { fail, getCreds, handle, ok } from "@/lib/api";
 import { agentKeyConfigured, isAgentAuthorized } from "@/lib/agent-auth";
-import { formatSaoPaulo, resolveGroup } from "@/lib/agent";
+import { formatSaoPaulo, READ_RULE, resolveGroup } from "@/lib/agent";
 import { findMessages, listContacts } from "@/lib/uazapi";
 import { jidToPhone } from "@/lib/phone";
 
@@ -38,7 +38,7 @@ export const GET = handle(async (req: Request) => {
   const desde = desdeRaw ? Date.parse(desdeRaw) : null;
   if (desdeRaw && !Number.isFinite(desde)) return fail("desde deve ser uma data/hora ISO (ex.: 2026-11-03T00:00:00-03:00).", 400);
 
-  const resolved = await resolveGroup(creds, { grupo, grupoId });
+  const resolved = await resolveGroup(creds, { grupo, grupoId }, READ_RULE);
   if (!resolved.ok) return fail(resolved.message, resolved.status, resolved.status === 422 ? { parecidos: resolved.parecidos } : {});
   const group = resolved.group;
 
