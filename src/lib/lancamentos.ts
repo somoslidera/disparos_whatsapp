@@ -169,3 +169,52 @@ export async function collectPending(
     }
   });
 }
+
+export const MAX_FILES_CAP = 100;
+
+/**
+ * Limita quantos arquivos (fotos/PDFs) saem numa busca, para a tarefa não estourar o limite de imagens por conversa.
+ * Corta por bloco (foto da nota + texto que a acompanha ficam juntos); só divide um bloco quando ele sozinho passa do limite.
+ * Grupos com itens mais antigos vêm primeiro. O que não coube continua pendente para a próxima busca.
+ */
+export function capFiles(groups: PendingGroup[], maxFiles: number) {
+  const ordered = [...groups].sort((a, b) => (a.itens[0]?.data || "~").localeCompare(b.itens[0]?.data || "~"));
+  let files = 0;
+  let full = false;
+  let leftItems = 0;
+  let leftFiles = 0;
+  const out: PendingGroup[] = [];
+  for (const g of ordered) {
+    const kept: PendingItem[] = [];
+    const blocks = new Map<number, PendingItem[]>();
+    for (const it of g.itens) blocks.set(it.bloco, [...(blocks.get(it.bloco) || []), it]);
+    for (const block of blocks.values()) {
+      const blockFiles = block.filter((it) => it.temArquivo).length;
+      if (!full && files + blockFiles <= maxFiles) {
+        kept.push(...block);
+        files += blockFiles;
+        continue;
+      }
+      if (!full && files === 0) {
+        // Bloco maior que o limite sozinho: leva até o limite e deixa o resto do bloco para depois.
+        for (const it of block) {
+          if (!full && (!it.temArquivo || files < maxFiles)) {
+            kept.push(it);
+            if (it.temArquivo) files++;
+          } else {
+            full = true;
+            leftItems++;
+            if (it.temArquivo) leftFiles++;
+          }
+        }
+        full = true;
+        continue;
+      }
+      full = true;
+      leftItems += block.length;
+      leftFiles += blockFiles;
+    }
+    if (kept.length > 0 || g.erro) out.push({ ...g, itens: kept });
+  }
+  return { grupos: out, arquivos: files, restantes: { itens: leftItems, arquivos: leftFiles } };
+}
