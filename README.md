@@ -112,7 +112,7 @@ Autenticação: header `Authorization: Bearer <DISPAROS_AGENT_KEY>`. Variáveis 
 
 | Variável | Descrição |
 | --- | --- |
-| `DISPAROS_AGENT_KEY` | Chave secreta do agente (mínimo 16 caracteres; use 32+ aleatórios) |
+| `DISPAROS_AGENT_KEY` | Chave secreta do agente (mínimo 16 caracteres; use 32+ aleatórios). Ao trocar, faça um novo deploy e atualize a chave nas tarefas agendadas; recusas aparecem no log como `[agente] acesso recusado`, com o motivo |
 | `DISPAROS_TESTE_NUMERO` | Número (DDI+DDD+número) que recebe os envios com `"teste": true` |
 | `DISPAROS_AVISO_NUMERO` | Opcional: número que recebe os avisos do agente (padrão: `DISPAROS_TESTE_NUMERO`) |
 | `UAZAPI_URL` / `UAZAPI_TOKEN` | Servidor e token da instância, para o servidor falar com o uazapi sem o navegador |
