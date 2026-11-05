@@ -387,10 +387,37 @@ export interface ChatMessagesPage {
   nextOffset: number | null;
 }
 
+/** Como pick, mas ignora maiúsculas/minúsculas e "_" (o uazapi devolve o conteúdo do WhatsApp com nomes variados). */
+function pickCI(obj: Json, ...keys: string[]): unknown {
+  const norm = (k: string) => k.toLowerCase().replace(/_/g, "");
+  const wanted = keys.map(norm);
+  for (const w of wanted) {
+    for (const [k, v] of Object.entries(obj)) {
+      if (norm(k) === w && v !== undefined && v !== null && v !== "") return v;
+    }
+  }
+  return undefined;
+}
+
+/** Conteúdo da mensagem: objeto direto ou JSON em texto. */
+function contentOf(m: Json): Json {
+  const c = m.content;
+  if (c && typeof c === "object" && !Array.isArray(c)) return c as Json;
+  if (typeof c === "string" && c.trim().startsWith("{")) {
+    try {
+      return JSON.parse(c) as Json;
+    } catch {
+      return {};
+    }
+  }
+  return {};
+}
+
 function kindOf(rawType: string): ChatMessageKind {
   const t = rawType.toLowerCase();
   if (!t || t === "conversation" || t.startsWith("extendedtext") || t === "text") return "texto";
   if (t.includes("reaction")) return "reacao";
+  if (t.includes("album")) return "outro"; // o álbum é só o agrupador; as fotos vêm como mensagens próprias
   if (t.includes("sticker")) return "figurinha";
   if (t.includes("image")) return "imagem";
   if (t.includes("video")) return "video";
@@ -409,19 +436,22 @@ function toMillis(v: unknown): number {
 }
 
 function normalizeMessage(m: Json): ChatMessage | null {
-  const content = m.content && typeof m.content === "object" ? (m.content as Json) : {};
+  const content = contentOf(m);
   const rawType = str(pick(m, "messageType", "type", "mediaType"));
   const kind = kindOf(rawType);
+  const contentText = typeof m.content === "string" && !m.content.trim().startsWith("{") ? m.content : "";
   const text =
     str(pick(m, "text", "body", "caption")) ||
-    (typeof m.content === "string" ? m.content : "") ||
-    str(pick(content, "text", "caption", "conversation", "name", "displayName"));
+    contentText ||
+    str(pickCI(content, "text", "caption", "conversation", "body"));
   const id = str(pick(m, "messageid", "messageId", "id"));
-  // Mensagens de sistema (protocolo, chaves, edições internas) não interessam a quem lê a conversa.
-  if (kind === "outro" && !text) return null;
+  // Mensagens de sistema, álbuns (agrupadores) e reações vazias não interessam a quem lê a conversa.
+  if (kind === "outro" && (!text || /album/i.test(rawType))) return null;
+  if (kind === "reacao" && !text) return null;
   if (/protocol|senderkey|keydistribution/i.test(rawType)) return null;
   const senderJid = str(pick(m, "sender_pn", "senderPn", "sender", "participant", "author"));
   const quoted = pick(m, "quoted", "quotedId", "quotedMessageId");
+  const isMedia = kind === "imagem" || kind === "documento" || kind === "video" || kind === "audio" || kind === "figurinha";
   return {
     id,
     timestamp: toMillis(pick(m, "messageTimestamp", "timestamp", "wa_timestamp", "created")),
@@ -431,8 +461,8 @@ function normalizeMessage(m: Json): ChatMessage | null {
     senderName: str(pick(m, "senderName", "pushName", "notifyName")),
     kind,
     text,
-    fileName: str(pick(content, "fileName", "title")) || str(pick(m, "fileName", "docName")) || undefined,
-    mimetype: str(pick(content, "mimetype", "mimeType")) || str(pick(m, "mimetype", "mimeType")) || undefined,
+    fileName: (isMedia && (str(pickCI(content, "fileName", "file_name", "title", "docName")) || str(pick(m, "fileName", "docName")))) || undefined,
+    mimetype: (isMedia && (str(pickCI(content, "mimetype", "mimeType", "mime_type")) || str(pick(m, "mimetype", "mimeType")))) || undefined,
     quotedId: typeof quoted === "string" && quoted ? quoted : undefined,
   };
 }
@@ -446,7 +476,15 @@ export async function findMessages(creds: Creds, chatId: string, limit: number, 
   const sample = rows[0] ? Object.keys(rows[0]).join(",") : "vazio";
   const types = [...new Set(rows.map((r) => str(pick(r, "messageType", "type"))))].slice(0, 12).join(",");
   // Só nomes de campos e contagens: nenhum conteúdo de mensagem nem credencial vai para o log.
+  const shapes = new Map<string, string>();
+  for (const r of rows) {
+    const t = str(pick(r, "messageType", "type")) || "?";
+    if (shapes.has(t)) continue;
+    const c = r.content;
+    shapes.set(t, c && typeof c === "object" ? Object.keys(c as Json).slice(0, 25).join("|") : typeof c === "string" ? `texto(${c.trim().startsWith("{") ? "json" : "simples"})` : String(c));
+  }
   console.info("[mensagens]", `${rows.length} itens, ${messages.length} úteis, campos: ${sample}, tipos: ${types}`);
+  console.info("[mensagens:conteudo]", [...shapes].map(([t, k]) => `${t}={${k}}`).join(" "));
   const hasMore = typeof d.hasMore === "boolean" ? d.hasMore : rows.length >= limit;
   const next = typeof d.nextOffset === "number" ? d.nextOffset : hasMore ? offset + rows.length : null;
   return { messages, hasMore, nextOffset: hasMore ? next : null };
