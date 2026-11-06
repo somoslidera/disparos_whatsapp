@@ -151,6 +151,11 @@ export async function readJsonFileStrict<T>(req: Request, pathname: string): Pro
     const hit = memory.get(pathname);
     return hit ? (JSON.parse(hit.value) as T) : null;
   }
+  if (kvOn()) {
+    // Erro do Redis lança; o Blob antigo (se estiver fora do ar) só deixa de completar.
+    const text = await kvRead(req, pathname);
+    return text === null ? null : (JSON.parse(text) as T);
+  }
   let lastErr: unknown;
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
