@@ -230,6 +230,13 @@ export function syncAudiences(): Promise<void> {
         }
         markImported(tag);
       }
+      // Proteção: o servidor respondeu sem nenhuma lista, mas este navegador tem listas (e nenhuma exclusão
+      // pendente). Em vez de apagar a cópia local, reenvia as listas para o servidor.
+      const local = getAudiences();
+      const pendingDeletes = loadPending().filter((p) => p.op === "delete").length;
+      if (server.length === 0 && local.length > 0 && pendingDeletes === 0) {
+        server = (await api<{ audiences: Audience[] }>("/api/listas", { method: "POST", body: JSON.stringify({ op: "import", audiences: local }) })).audiences;
+      }
       applyServer(server);
       if (stillPending) setSync("error", `${stillPending} alteração(ões) ainda não enviada(s) ao servidor.`);
       else setSync("synced");

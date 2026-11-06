@@ -119,7 +119,10 @@ export function DataProvider({ children }: { children: ReactNode }) {
     const first = setTimeout(run, 0);
     const onFocus = () => run();
     window.addEventListener("focus", onFocus);
-    const t = setInterval(run, 60_000);
+    // A cada 5 minutos, só com a aba visível (cada sincronização consome operações do Vercel Blob)
+    const t = setInterval(() => {
+      if (document.visibilityState === "visible") run();
+    }, 5 * 60_000);
     return () => {
       clearTimeout(first);
       clearInterval(t);

@@ -1,4 +1,4 @@
-import { del, get, list, put } from "@vercel/blob";
+import { BlobNotFoundError, del, get, list, put } from "@vercel/blob";
 import { blobAuth, blobMode } from "./blob-auth";
 import { kv, kvAvailable, kvCompareAndSet, kvEtag, kvKeys, kvPipeline } from "./kv";
 
@@ -140,6 +140,32 @@ export async function putJsonFile(req: Request, pathname: string, value: unknown
     cacheControlMaxAge: 60,
     ...blobAuth(req),
   });
+}
+
+/**
+ * Como readJsonFile, mas distingue "não existe" (null) de "não deu para ler" (lança erro).
+ * Use quando uma falha de leitura não pode ser confundida com ausência de dados.
+ */
+export async function readJsonFileStrict<T>(req: Request, pathname: string): Promise<T | null> {
+  if (memoryMode()) {
+    const hit = memory.get(pathname);
+    return hit ? (JSON.parse(hit.value) as T) : null;
+  }
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const res = await get(pathname, { access: "public", useCache: false, ...blobAuth(req) });
+      if (!res) return null;
+      if (res.statusCode !== 200 || !res.stream) throw new Error(`leitura de ${pathname} respondeu ${res.statusCode}`);
+      const text = await new Response(res.stream).text();
+      return JSON.parse(text) as T;
+    } catch (err) {
+      if (err instanceof BlobNotFoundError) return null;
+      lastErr = err;
+      await new Promise((r) => setTimeout(r, 200 * (attempt + 1)));
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error(`Falha ao ler ${pathname}`);
 }
 
 export async function readJsonFile<T>(req: Request, pathname: string): Promise<T | null> {
