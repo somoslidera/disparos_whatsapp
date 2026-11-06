@@ -1,5 +1,6 @@
 import { del, get, list, put } from "@vercel/blob";
 import { blobAuth, blobMode } from "./blob-auth";
+import { kv, kvAvailable, kvCompareAndSet, kvEtag, kvKeys, kvPipeline } from "./kv";
 
 /**
  * Leitura/escrita de documentos JSON no Vercel Blob (store público do projeto), com controle
@@ -12,13 +13,51 @@ const memory = g.__jsonMemory ?? new Map<string, { value: string; etag: string }
 g.__jsonMemory = memory;
 
 export function jsonStoreAvailable(req: Request): boolean {
-  return memoryMode() || blobMode(req) !== "none";
+  return memoryMode() || kvAvailable() || blobMode(req) !== "none";
+}
+
+/**
+ * Com o Redis (Upstash) configurado, os documentos ficam lá. O Blob vira só fonte antiga de leitura:
+ * um documento que ainda não está no Redis é copiado do Blob na primeira leitura. Itens apagados
+ * ganham uma marca ("tomb") para não voltarem pela cópia do Blob.
+ */
+const kvOn = () => !memoryMode() && kvAvailable();
+const KV_NS = "disparos:";
+const TOMB = `${KV_NS}json-apagados`;
+
+async function blobReadText(req: Request, pathname: string): Promise<string | null> {
+  if (blobMode(req) === "none") return null;
+  const res = await get(pathname, { access: "public", useCache: false, ...blobAuth(req) }).catch(() => null);
+  if (!res || res.statusCode !== 200 || !res.stream) return null;
+  return new Response(res.stream).text().catch(() => null);
+}
+
+async function kvRead(req: Request, pathname: string): Promise<string | null> {
+  const [text, tomb] = await kvPipeline<string | number | null>([
+    ["GET", KV_NS + pathname],
+    ["SISMEMBER", TOMB, pathname],
+  ]);
+  if (typeof text === "string") return text;
+  if (Number(tomb) === 1) return null;
+  const old = await blobReadText(req, pathname);
+  if (old === null) return null;
+  await kv(["SET", KV_NS + pathname, old, "NX"]);
+  return (await kv<string | null>(["GET", KV_NS + pathname])) ?? old;
 }
 
 export async function readJsonDoc<T>(req: Request, pathname: string): Promise<{ value: T; etag: string } | null> {
   if (memoryMode()) {
     const hit = memory.get(pathname);
     return hit ? { value: JSON.parse(hit.value) as T, etag: hit.etag } : null;
+  }
+  if (kvOn()) {
+    const text = await kvRead(req, pathname);
+    if (text === null) return null;
+    try {
+      return { value: JSON.parse(text) as T, etag: kvEtag(text) };
+    } catch {
+      return null;
+    }
   }
   const res = await get(pathname, { access: "public", useCache: false, ...blobAuth(req) }).catch(() => null);
   if (!res || res.statusCode !== 200 || !res.stream) return null;
@@ -40,6 +79,12 @@ export async function writeJsonDoc(req: Request, pathname: string, value: unknow
     const cur = memory.get(pathname);
     if (etag ? cur?.etag !== etag : Boolean(cur)) throw new Error("conflict");
     memory.set(pathname, { value: body, etag: `m${Date.now()}${Math.random()}` });
+    return;
+  }
+  if (kvOn()) {
+    const okWrite = await kvCompareAndSet(KV_NS + pathname, body, etag);
+    if (!okWrite) throw new Error("conflict");
+    await kv(["SREM", TOMB, pathname]);
     return;
   }
   await put(pathname, body, {
@@ -80,6 +125,13 @@ export async function putJsonFile(req: Request, pathname: string, value: unknown
     memory.set(pathname, { value: body, etag: `m${Date.now()}` });
     return;
   }
+  if (kvOn()) {
+    await kvPipeline([
+      ["SET", KV_NS + pathname, body],
+      ["SREM", TOMB, pathname],
+    ]);
+    return;
+  }
   await put(pathname, body, {
     access: "public",
     contentType: "application/json",
@@ -98,6 +150,16 @@ export async function readJsonFile<T>(req: Request, pathname: string): Promise<T
 /** Lista os caminhos sob um prefixo. */
 export async function listJsonFiles(req: Request, prefix: string): Promise<string[]> {
   if (memoryMode()) return [...memory.keys()].filter((k) => k.startsWith(prefix));
+  if (kvOn()) {
+    const fromKv = (await kvKeys(KV_NS + prefix)).map((k) => k.slice(KV_NS.length));
+    const fromBlob = blobMode(req) === "none" ? [] : await listBlobNames(req, prefix).catch(() => []);
+    const tomb = new Set(await kv<string[]>(["SMEMBERS", TOMB]));
+    return [...new Set([...fromKv, ...fromBlob])].filter((p) => !tomb.has(p));
+  }
+  return listBlobNames(req, prefix);
+}
+
+async function listBlobNames(req: Request, prefix: string): Promise<string[]> {
   const out: string[] = [];
   let cursor: string | undefined;
   do {
@@ -111,6 +173,14 @@ export async function listJsonFiles(req: Request, prefix: string): Promise<strin
 export async function deleteJsonFile(req: Request, pathname: string): Promise<void> {
   if (memoryMode()) {
     memory.delete(pathname);
+    return;
+  }
+  if (kvOn()) {
+    await kvPipeline([
+      ["DEL", KV_NS + pathname],
+      ["SADD", TOMB, pathname],
+    ]);
+    if (blobMode(req) !== "none") await del(pathname, blobAuth(req)).catch(() => null);
     return;
   }
   await del(pathname, blobAuth(req));

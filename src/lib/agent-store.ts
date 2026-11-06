@@ -2,6 +2,7 @@ import { del, get, list, put } from "@vercel/blob";
 import { createHash } from "node:crypto";
 import { nanoid } from "nanoid";
 import { blobAuth, blobMode } from "./blob-auth";
+import { kv, kvAvailable, kvPipeline } from "./kv";
 
 /**
  * Armazenamento dos envios do agente no Vercel Blob. O store do projeto é público (os anexos precisam
@@ -55,6 +56,40 @@ const STALE_INFLIGHT_MS = 15 * 60 * 1000;
 const memoryMode = () => process.env.AGENT_STORE_MEMORY === "1";
 const memory = new Map<string, { value: string; uploadedAt: Date }>();
 
+/**
+ * Com o Redis (Upstash) configurado, o estado vai para lá e o Blob só é lido como fonte antiga
+ * (para não perder o que já estava gravado antes da troca). Sem Redis, tudo segue no Blob.
+ */
+const kvOn = () => !memoryMode() && kvAvailable();
+const KV_NS = "disparos:";
+const LOG_INDEX = () => `${KV_NS}agente/log-index`;
+const LOG_KEEP = 2000;
+const LOG_TTL_S = 180 * 24 * 3600;
+
+async function blobReadJson<T>(req: Request, pathname: string): Promise<T | null> {
+  if (blobMode(req) === "none") return null;
+  const res = await get(pathname, { access: ACCESS, useCache: false, ...blobAuth(req) }).catch(() => null);
+  if (!res || !("stream" in res) || !res.stream) return null;
+  const text = await new Response(res.stream).text().catch(() => "");
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    return null;
+  }
+}
+
+async function blobListNames(req: Request, prefix: string): Promise<string[]> {
+  const names: string[] = [];
+  const auth = blobAuth(req);
+  let cursor: string | undefined;
+  do {
+    const page = await list({ prefix, limit: 1000, cursor, ...auth });
+    names.push(...page.blobs.map((b) => b.pathname));
+    cursor = page.hasMore ? page.cursor : undefined;
+  } while (cursor);
+  return names;
+}
+
 function safeRef(referencia: string): string {
   return referencia.trim().toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 150);
 }
@@ -63,6 +98,17 @@ async function readJson<T>(req: Request, pathname: string): Promise<T | null> {
   if (memoryMode()) {
     const hit = memory.get(pathname);
     return hit ? (JSON.parse(hit.value) as T) : null;
+  }
+  if (kvOn()) {
+    const text = await kv<string | null>(["GET", KV_NS + pathname]);
+    if (text) {
+      try {
+        return JSON.parse(text) as T;
+      } catch {
+        return null;
+      }
+    }
+    return blobReadJson<T>(req, pathname);
   }
   const res = await get(pathname, { access: ACCESS, useCache: false, ...blobAuth(req) }).catch(() => null);
   if (!res || !("stream" in res) || !res.stream) return null;
@@ -80,6 +126,13 @@ async function writeJson(req: Request, pathname: string, value: unknown, allowOv
     memory.set(pathname, { value: JSON.stringify(value), uploadedAt: new Date() });
     return;
   }
+  if (kvOn()) {
+    const args: (string | number)[] = ["SET", KV_NS + pathname, JSON.stringify(value)];
+    if (!allowOverwrite) args.push("NX");
+    const r = await kv<string | null>(args);
+    if (r === null) throw new Error("already exists");
+    return;
+  }
   await put(pathname, JSON.stringify(value), {
     access: ACCESS,
     contentType: "application/json",
@@ -90,7 +143,7 @@ async function writeJson(req: Request, pathname: string, value: unknown, allowOv
 }
 
 export function storeAvailable(req: Request): boolean {
-  return memoryMode() || blobMode(req) !== "none";
+  return memoryMode() || kvAvailable() || blobMode(req) !== "none";
 }
 
 /**
@@ -99,6 +152,13 @@ export function storeAvailable(req: Request): boolean {
  */
 export async function claimReference(req: Request, referencia: string, draft: AgentRecord): Promise<{ claimed: true } | { claimed: false; existing: AgentRecord }> {
   const pathname = `${REF_PREFIX()}${safeRef(referencia)}.json`;
+  if (kvOn()) {
+    // Referência gravada no Blob antes da troca: continua valendo para não repetir envio.
+    const legacy = await blobReadJson<AgentRecord>(req, pathname);
+    if (legacy && (legacy.status === "concluido" || legacy.status === "parcial" || legacy.status === "aviso")) {
+      return { claimed: false, existing: legacy };
+    }
+  }
   try {
     await writeJson(req, pathname, draft, false);
     return { claimed: true };
@@ -124,12 +184,26 @@ export async function releaseReference(req: Request, referencia: string) {
     memory.delete(pathname);
     return;
   }
+  if (kvOn()) {
+    await kv(["DEL", KV_NS + pathname]);
+    return;
+  }
   await del(pathname, blobAuth(req)).catch(() => null);
 }
 
 export async function appendLog(req: Request, record: AgentRecord) {
   const stamp = record.data.replace(/[:.]/g, "-");
-  await writeJson(req, `${LOG_PREFIX()}${stamp}-${record.id}.json`, record, true);
+  const pathname = `${LOG_PREFIX()}${stamp}-${record.id}.json`;
+  if (kvOn()) {
+    const key = KV_NS + pathname;
+    await kvPipeline([
+      ["SET", key, JSON.stringify(record), "EX", LOG_TTL_S],
+      ["ZADD", LOG_INDEX(), new Date(record.data).getTime() || Date.now(), key],
+      ["ZREMRANGEBYRANK", LOG_INDEX(), 0, -(LOG_KEEP + 1)],
+    ]);
+    return;
+  }
+  await writeJson(req, pathname, record, true);
 }
 
 /** Últimos registros do histórico do agente, mais recentes primeiro. */
@@ -141,6 +215,29 @@ export async function listLog(req: Request, limit = 100): Promise<AgentRecord[]>
       .slice(0, limit)
       .map(([, v]) => JSON.parse(v.value) as AgentRecord);
   }
+  if (kvOn()) {
+    const keys = await kv<string[]>(["ZREVRANGE", LOG_INDEX(), 0, Math.max(0, limit - 1)]);
+    const fresh: AgentRecord[] = [];
+    if (keys.length) {
+      const values = await kv<(string | null)[]>(["MGET", ...keys]);
+      for (const v of values) {
+        if (!v) continue;
+        try {
+          fresh.push(JSON.parse(v) as AgentRecord);
+        } catch {
+          /* ignora registro corrompido */
+        }
+      }
+    }
+    if (fresh.length >= limit || blobMode(req) === "none") return fresh;
+    // Completa com o histórico antigo do Blob (só leitura).
+    const old = await listLogFromBlob(req, limit - fresh.length).catch(() => []);
+    return [...fresh, ...old];
+  }
+  return listLogFromBlob(req, limit);
+}
+
+async function listLogFromBlob(req: Request, limit: number): Promise<AgentRecord[]> {
   const auth = blobAuth(req);
   const blobs: { pathname: string; uploadedAt: Date }[] = [];
   let cursor: string | undefined;
@@ -165,6 +262,20 @@ export async function checkRateLimit(req: Request, max: number, bucket = "envio"
     if (recent.length >= max) return { allowed: false, count: recent.length };
     memory.set(`${prefix}${Date.now()}-${nanoid(6)}`, { value: "1", uploadedAt: new Date() });
     return { allowed: true, count: recent.length + 1 };
+  }
+  if (kvOn()) {
+    const key = `${KV_NS}${prefix}zset`;
+    const now = Date.now();
+    const [, count] = await kvPipeline<number>([
+      ["ZREMRANGEBYSCORE", key, 0, now - 60 * 60 * 1000],
+      ["ZCARD", key],
+    ]);
+    if (Number(count) >= max) return { allowed: false, count: Number(count) };
+    await kvPipeline([
+      ["ZADD", key, now, `${now}-${nanoid(6)}`],
+      ["EXPIRE", key, 3700],
+    ]);
+    return { allowed: true, count: Number(count) + 1 };
   }
   const auth = blobAuth(req);
   const page = await list({ prefix: prefix, limit: 1000, ...auth });
@@ -200,7 +311,19 @@ export interface NoteMark {
 const LANC_PREFIX = (grupoId: string) => `agente/${secretSegment()}/lanc/${safeRef(grupoId)}/`;
 const markPath = (grupoId: string, id: string) => `${LANC_PREFIX(grupoId)}${safeRef(id) || "sem-id"}.json`;
 
+const markSetKey = (grupoId: string) => `${KV_NS}${LANC_PREFIX(grupoId)}ids`;
+const markMigratedKey = (grupoId: string) => `${KV_NS}${LANC_PREFIX(grupoId)}migrado`;
+
 export async function markNotes(req: Request, marks: NoteMark[]) {
+  if (kvOn()) {
+    const cmds: (string | number)[][] = [];
+    for (const m of marks) {
+      cmds.push(["SET", KV_NS + markPath(m.grupoId, m.id), JSON.stringify(m)]);
+      cmds.push(["SADD", markSetKey(m.grupoId), noteKey(m.id)]);
+    }
+    await kvPipeline(cmds);
+    return;
+  }
   await Promise.all(marks.map((m) => writeJson(req, markPath(m.grupoId, m.id), m, true)));
 }
 
@@ -208,6 +331,22 @@ export async function markNotes(req: Request, marks: NoteMark[]) {
 export async function listMarkedIds(req: Request, grupoId: string): Promise<Set<string>> {
   const prefix = LANC_PREFIX(grupoId);
   const names: string[] = [];
+  if (kvOn()) {
+    // Na primeira leitura de cada grupo, copia para o Redis o que já estava marcado no Blob.
+    const migrated = await kv<string | null>(["GET", markMigratedKey(grupoId)]);
+    if (!migrated && blobMode(req) !== "none") {
+      const old = await blobListNames(req, prefix).catch(() => null);
+      if (old) {
+        const ids = old.map((n) => n.slice(prefix.length).replace(/\.json$/, "")).filter(Boolean);
+        const cmds: (string | number)[][] = [];
+        for (let i = 0; i < ids.length; i += 500) cmds.push(["SADD", markSetKey(grupoId), ...ids.slice(i, i + 500)]);
+        cmds.push(["SET", markMigratedKey(grupoId), new Date().toISOString()]);
+        await kvPipeline(cmds);
+      }
+    }
+    const ids = await kv<string[]>(["SMEMBERS", markSetKey(grupoId)]);
+    return new Set(ids);
+  }
   if (memoryMode()) {
     for (const k of memory.keys()) if (k.startsWith(prefix)) names.push(k);
   } else {
