@@ -19,7 +19,8 @@ const schema = z
   .refine((v) => v.grupo || v.grupoId, { message: "Informe grupo (nome exato) ou grupoId." });
 
 export function confirmationText(n: number, observacao?: string) {
-  const base = n === 1 ? "✅ Recebemos e já lançamos 1 item. Obrigado!" : `✅ Recebemos e já lançamos ${n} itens. Obrigado!`;
+  void n; // a mensagem no grupo não leva mais a quantidade de itens (pedido do Jamur, 09/11/2026)
+  const base = "✅ Recebemos e já lançamos suas notas. Obrigado!";
   const obs = observacao?.trim();
   return obs ? `${base}\n\n${obs}` : base;
 }
